@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: light; }
+.dark { color-scheme: dark; }
+
+body {
+  @apply bg-fog text-ink antialiased dark:bg-ink dark:text-fog;
+  font-feature-settings: 'cv11', 'ss01';
+}
+
+@layer components {
+  .card { @apply rounded-card border border-black/[0.07] bg-paper shadow-card dark:border-ink-line dark:bg-ink-soft; }
+  .input {
+    @apply w-full rounded-lg border border-black/10 bg-paper px-3.5 py-2.5 text-[15px] outline-none transition
+      placeholder:text-ink/35 focus:border-amber-aws focus:ring-2 focus:ring-amber-aws/25
+      dark:border-ink-line dark:bg-ink dark:placeholder:text-fog/30;
+  }
+  .btn {
+    @apply inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-[15px] font-semibold
+      transition active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50
+      focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-aws;
+  }
+  .btn-primary { @apply btn bg-amber-aws text-ink hover:bg-amber-dark; }
+  .btn-dark { @apply btn bg-ink text-paper hover:bg-ink-soft dark:bg-paper dark:text-ink dark:hover:bg-fog; }
+  .btn-ghost { @apply btn border border-black/10 bg-transparent hover:bg-black/[0.04] dark:border-ink-line dark:hover:bg-white/[0.06]; }
+  .btn-danger { @apply btn border border-red-600/25 bg-transparent text-red-600 hover:bg-red-600/10 dark:text-red-400; }
+  .label { @apply mb-1.5 block text-[13px] font-semibold text-ink/70 dark:text-fog/70; }
+  .skeleton { @apply animate-pulse rounded-lg bg-black/[0.07] dark:bg-white/[0.08]; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
