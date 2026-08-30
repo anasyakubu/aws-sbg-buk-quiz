@@ -1,11 +1,11 @@
 import { io, Socket } from 'socket.io-client';
-import { getToken } from './api';
+import { getToken, API_ORIGIN } from './api';
 
 let socket: Socket | null = null;
 
 export function getSocket(): Socket {
   if (socket) return socket;
-  socket = io('/', {
+  socket = io(API_ORIGIN || '/', {
     auth: cb => cb({ token: getToken() }),
     reconnection: true,
     reconnectionAttempts: Infinity,

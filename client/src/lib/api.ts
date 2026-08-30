@@ -1,4 +1,8 @@
-const BASE = '/api';
+// Empty in dev: Vite proxies /api to the local server (see vite.config.ts).
+// In production set VITE_API_URL to the deployed API origin, e.g.
+// https://sbg-buk-quiz-api.vercel.app
+export const API_ORIGIN = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+const BASE = `${API_ORIGIN}/api`;
 
 export function getToken(): string | null { return localStorage.getItem('token'); }
 export function setToken(t: string | null) { t ? localStorage.setItem('token', t) : localStorage.removeItem('token'); }

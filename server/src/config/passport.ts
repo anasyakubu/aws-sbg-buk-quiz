@@ -13,7 +13,10 @@ export function configurePassport(): boolean {
       {
         clientID: env.google.clientId,
         clientSecret: env.google.clientSecret,
-        callbackURL: '/api/auth/google/callback',
+        // Absolute in production (required behind Vercel's proxy), relative locally.
+        callbackURL: env.serverUrl
+          ? `${env.serverUrl}/api/auth/google/callback`
+          : '/api/auth/google/callback',
       },
       async (_accessToken, _refreshToken, profile, done) => {
         try {

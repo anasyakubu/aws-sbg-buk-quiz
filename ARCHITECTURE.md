@@ -3,14 +3,13 @@
 ## 1. System overview
 
 ```
-                        ┌─────────────────────────────┐
-                        │        NGINX (TLS, gzip)     │
-                        └──────┬───────────────┬───────┘
-                               │ /api, /socket │ /
-                     ┌─────────▼─────────┐ ┌───▼────────────┐
+                     ┌────────────────────┐ ┌────────────────┐
                      │  Node.js + Express │ │  React (Vite)  │
-                     │  Socket.IO server  │ │  PWA, SW cache │
+                     │  Socket.IO server  │◄┤  PWA, SW cache │
+                     │  (persistent host) │ │  (Vercel/CDN)  │
                      └──┬──────┬──────┬───┘ └────────────────┘
+                        │      │      │   VITE_API_URL points the
+                        │      │      │   browser at the API origin
                         │      │      │
                 ┌───────▼─┐ ┌──▼───┐ ┌▼──────────────┐
                 │ MongoDB │ │Redis*│ │ OpenAI /      │
@@ -68,8 +67,8 @@ Payloads sent to players never contain correct answers until `question:end`.
 13. ▶ Analytics dashboard (data already captured in GameResult)
 14. ✅ PWA (manifest, service worker via vite-plugin-pwa)
 15. ▶ Testing (Vitest/Supertest harness — next phase)
-16. ✅ Dockerization (Dockerfiles + compose with Mongo/Redis)
-17. ✅ Deployment (NGINX config, compose, PM2 notes)
+16. ✅ Deployment configs (Vercel for client + REST API, PM2 for the live-game host)
+17. ▶ Redis-backed game state (needed before the API can run multi-instance or serverless)
 18. ✅ Documentation (README, env, API, socket contract)
 
 ▶ = scaffolded and scheduled for the next iteration, alongside: admin panel,

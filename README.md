@@ -15,21 +15,20 @@ See `ARCHITECTURE.md` for system design, data model, and the phase roadmap.
 - **Low-network resilience**: automatic reconnect with exponential backoff, answers saved to localStorage before sending and re-sent after reconnect, players are never dropped mid-game, connection status banner, compressed payloads, PWA with offline shell caching
 - Game reports persisted (per-player scores/accuracy/response times + per-question stats) and score history for participants
 - Dark/light mode, mobile-first responsive UI, keyboard/ARIA accessibility, skeleton loaders and empty states
-- Docker Compose, NGINX, GitHub Actions CI, PM2 config
+- Vercel deployment configs for both packages, GitHub Actions CI, PM2 config for a persistent host
 
 Coming in the next phases (schemas and hooks are already in place): admin panel, badges, PDF certificates, analytics dashboard UI, CSV/Excel/JSON import-export, question bank UI, scheduling, remaining question types, push notifications, Redis Socket.IO adapter + BullMQ jobs, automated tests.
 
 ## Requirements
 
 - Node.js 20+
-- MongoDB 6/7 (local, Docker, or MongoDB Atlas)
+- MongoDB 6/7 (local or MongoDB Atlas)
 - Optional: Redis 7 (only needed for multi-instance scaling), OpenAI and/or Anthropic API keys, Google OAuth credentials
 
 ## Quick start (development)
 
 ```bash
-# 1. MongoDB (skip if you already run one)
-docker run -d --name mongo -p 27017:27017 mongo:7
+# 1. Make sure MongoDB is running locally, or point MONGODB_URI at Atlas
 
 # 2. Backend
 cd server
@@ -50,7 +49,8 @@ Open http://localhost:5173, create an account, build a quiz (or generate one wit
 | Variable | Required | Description |
 |---|---|---|
 | `PORT` | no | API port, default 5000 |
-| `CLIENT_URL` | yes in prod | Frontend origin for CORS + OAuth redirects |
+| `CLIENT_URL` | yes in prod | Frontend origin(s) for CORS + OAuth redirects. Comma-separated to allow preview URLs |
+| `SERVER_URL` | yes in prod | Public origin of the API, used to build the Google OAuth callback URL |
 | `MONGODB_URI` | yes | e.g. `mongodb://localhost:27017/sbg-buk-quiz` or an Atlas URI |
 | `JWT_SECRET` | yes | Long random string — rotate = everyone signs in again |
 | `JWT_EXPIRES_IN` | no | Default `7d` |
@@ -58,6 +58,8 @@ Open http://localhost:5173, create an account, build a quiz (or generate one wit
 | `OPENAI_API_KEY` | no | Enables the OpenAI provider |
 | `ANTHROPIC_API_KEY` | no | Enables the Claude provider |
 | `REDIS_URL` | no | Reserved for the Socket.IO adapter / BullMQ (multi-instance) |
+
+The client reads one variable, `VITE_API_URL` (see `client/.env.example`): the origin of the deployed API. Leave it blank in development — Vite proxies `/api` and `/socket.io` to `localhost:5000`.
 
 ## Google OAuth setup
 
@@ -69,16 +71,54 @@ Open http://localhost:5173, create an account, build a quiz (or generate one wit
 
 Add `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY` to `server/.env`. The generate page shows which providers are configured. Generation is rate-limited (30/hour per IP) and every AI draft must pass through the editor before it can be hosted.
 
-## Production with Docker
+## Deploying
 
-```bash
-cp server/.env.example .env       # compose reads JWT_SECRET etc. from repo-root .env
-docker compose up -d --build      # app on http://localhost:8080
-```
+### Important: live games need a persistent server
 
-Compose runs MongoDB, Redis, the API, and an NGINX container serving the built client and proxying `/api` + `/socket.io` (WebSocket upgrade included). Put TLS in front with your usual reverse proxy or a cloud load balancer. For bare-metal/EC2 without Docker, build both packages and use `ecosystem.config.js` with PM2.
+The REST API is stateless and runs fine on Vercel. **The live game engine does not.**
+`server/src/socket/game.ts` holds game state in memory and drives question timers with
+`setTimeout`; Vercel's serverless functions are short-lived, cannot hold WebSocket
+connections, and are not shared between invocations. Deployed only to Vercel, everything
+except hosting and playing a live game will work.
 
-**Scaling note:** game state lives in server memory, so run one API instance. To scale horizontally, add `@socket.io/redis-adapter` and move `GameManager` state to Redis — the code isolates all state behind `server/src/socket/game.ts` to make that a contained change.
+Two options:
+
+**A. Client on Vercel, API on a persistent host (recommended).**
+Deploy `client/` to Vercel and `server/` to Render, Railway, Fly.io, or an EC2 box with
+PM2 (`ecosystem.config.js`). The server's start command is `npm run build && npm start`,
+which runs `src/index.ts` — REST + Socket.IO in one process. Set `VITE_API_URL` on Vercel
+to that host's origin; both REST calls and the socket connection follow it.
+
+**B. Both on Vercel (REST only).**
+`server/vercel.json` + `server/api/index.ts` wrap the Express app in a serverless function.
+Auth, the quiz builder, AI generation, and history all work. Hosting or joining a live game
+will not.
+
+### Client (Vercel)
+
+1. New project → root directory `client/`. `client/vercel.json` sets the Vite framework
+   preset, `dist` output, the SPA rewrite (so `/join/123456` doesn't 404 on refresh), and
+   immutable caching for hashed assets while keeping the service worker revalidating.
+2. Environment variable: `VITE_API_URL=https://<your-api-origin>` (no trailing slash).
+3. Deploy. Re-deploy after changing `VITE_API_URL` — Vite inlines it at build time.
+
+### API (Vercel)
+
+1. New project → root directory `server/`.
+2. Environment variables: `MONGODB_URI`, `JWT_SECRET`, `CLIENT_URL`, `SERVER_URL`,
+   plus the optional Google/AI keys. Set `NODE_ENV=production`.
+3. In MongoDB Atlas, allow network access from `0.0.0.0/0` — Vercel's function IPs are not
+   fixed. The Mongoose connection is cached on `globalThis` so warm invocations reuse it.
+4. Add `https://<your-api-origin>/api/auth/google/callback` to the authorized redirect URIs
+   in Google Cloud Console.
+
+`server/vercel.json` routes every request to `api/index.ts`, which awaits the cached DB
+connection and hands off to the Express app. Functions get 1 GB and a 30s ceiling, enough
+for AI generation.
+
+**Scaling note:** game state lives in server memory, so run one API instance. To scale
+horizontally, add `@socket.io/redis-adapter` and move game state to Redis — the code
+isolates all of it behind `server/src/socket/game.ts` to make that a contained change.
 
 ## API reference
 
@@ -129,10 +169,11 @@ Built with `vite-plugin-pwa`: installable manifest, app icons, auto-updating ser
 ```
 aws-sbg-buk-quiz/
 ├─ ARCHITECTURE.md
-├─ docker-compose.yml            # mongo + redis + api + nginx client
-├─ ecosystem.config.js           # PM2 alternative
+├─ ecosystem.config.js           # PM2 config for a persistent host
 ├─ .github/workflows/ci.yml
 ├─ server/
+│  ├─ vercel.json                # serverless API config
+│  ├─ api/index.ts               # Vercel entry (wraps the Express app)
 │  └─ src/
 │     ├─ config/                 # env, db, passport (Google)
 │     ├─ models/                 # User, Quiz(+questions), GameResult
@@ -140,9 +181,12 @@ aws-sbg-buk-quiz/
 │     ├─ controllers/            # auth, quiz, ai, results
 │     ├─ routes/                 # REST API + rate limits
 │     ├─ services/               # ai.service (OpenAI + Anthropic)
+│     ├─ app.ts                  # Express app factory (shared by both entries)
+│     ├─ index.ts                # persistent server: REST + Socket.IO
 │     ├─ socket/game.ts          # live game engine
 │     └─ utils/
 └─ client/
+   ├─ vercel.json                # SPA rewrites + cache headers
    └─ src/
       ├─ components/             # Navbar, ConnectionBanner, Leaderboard, Countdown, ui
       ├─ context/                # Auth, Theme
@@ -152,4 +196,4 @@ aws-sbg-buk-quiz/
 
 ## Security notes
 
-Helmet headers, CORS locked to `CLIENT_URL`, global + per-route rate limiting, Zod validation on every write, bcrypt(12) hashing, JWT expiry, owner checks on every quiz/report query, server-authoritative scoring, and React's escaping for XSS. The API is stateless (no cookies), which removes classic CSRF exposure; if you move tokens into cookies, add SameSite + a CSRF token.
+Helmet headers, CORS locked to the origins in `CLIENT_URL`, global + per-route rate limiting, Zod validation on every write, bcrypt(12) hashing, JWT expiry, owner checks on every quiz/report query, server-authoritative scoring, and React's escaping for XSS. The API is stateless (no cookies), which removes classic CSRF exposure; if you move tokens into cookies, add SameSite + a CSRF token.
