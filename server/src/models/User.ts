@@ -32,7 +32,7 @@ const userSchema = new Schema<IUser>(
 );
 
 userSchema.set('toJSON', {
-  transform: (_doc, ret) => {
+  transform: (_doc: Document, ret: Record<string, any>) => {
     delete ret.passwordHash;
     delete ret.__v;
     return ret;
