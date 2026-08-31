@@ -1,10 +1,10 @@
-import Logo from "../assets/logo.jpeg"
+import LogoImg from "../assets/logo.jpeg"
 
 export function Logo({ size = 34 }: { size?: number }) {
   return (
     <span className="inline-flex items-center gap-2.5">
       <img
-        src={Logo}
+        src={LogoImg}
         alt="SBG BUK Quiz"
         width={size}
         height={size}
