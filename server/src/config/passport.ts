@@ -35,7 +35,7 @@ export function configurePassport(): boolean {
             if (!user.avatarUrl) user.avatarUrl = profile.photos?.[0]?.value;
             await user.save();
           }
-          done(null, user);
+          done(null, user as Express.User);
         } catch (err) {
           done(err as Error);
         }
