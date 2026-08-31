@@ -2,7 +2,7 @@ import http from 'http';
 import { Server } from 'socket.io';
 import { env } from './config/env';
 import { connectDB } from './config/db';
-import { createApp } from './app';
+import app from './app';
 import { registerGameHandlers } from './socket/game';
 
 /**
@@ -13,7 +13,6 @@ import { registerGameHandlers } from './socket/game';
 async function main() {
   await connectDB();
 
-  const app = createApp();
   const server = http.createServer(app);
 
   const io = new Server(server, {
