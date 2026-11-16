@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { motion } from 'framer-motion';
 import { Check, X, Flame, Hourglass } from 'lucide-react';
-import { getSocket } from '../lib/socket';
+import { answerLive, joinLive, liveState } from '../lib/live';
 import { getPlayerId, savePendingAnswer, getPendingAnswer, clearPendingAnswer } from '../lib/player';
 import type { PublicQuestion } from '../lib/types';
 import { Countdown } from '../components/Countdown';
@@ -14,7 +14,6 @@ type Phase = 'connecting' | 'lobby' | 'question' | 'waiting' | 'result' | 'pause
 
 export default function Play() {
   const { pin = '' } = useParams();
-  const { state } = useLocation() as { state?: { joined?: any } };
   const navigate = useNavigate();
   const playerId = getPlayerId();
 
@@ -34,104 +33,98 @@ export default function Play() {
   const questionRef = useRef<PublicQuestion | null>(null);
   questionRef.current = question;
 
+  const currentQuestionIndex = useRef(-1);
+  const loading = useRef(false);
+
   const applyJoined = (res: any) => {
+    if (res.kicked) { setPhase('kicked'); return; }
+    if (!res.state || !res.you) return;
     setQuizTitle(res.state.quizTitle);
-    setPlayerCount(res.state.players.length);
+    setPlayerCount(res.state.playerCount ?? res.state.players?.length ?? 0);
     setMe({ score: res.you.score, streak: res.you.streak });
     if (res.state.status === 'ended') {
+      clearPendingAnswer(pin);
       if (res.finale) setFinale(res.finale);
-      return setPhase('over');
+      setPhase('over'); return;
     }
     if (res.state.status === 'reveal' && res.revealedResult) {
+      clearPendingAnswer(pin);
       setResult(res.revealedResult);
-      return setPhase('result');
+      setPhase('result'); return;
     }
     if (res.activeQuestion) {
-      setSkew(res.activeQuestion.serverNow - Date.now());
-      setQuestion(res.activeQuestion.question);
-      setDeadline(res.activeQuestion.deadline);
-      setPhase(res.activeQuestion.alreadyAnswered ? 'waiting' : res.state.status === 'paused' ? 'paused' : 'question');
-      if (!res.activeQuestion.alreadyAnswered) setSelected([]);
-    } else if (res.state.status === 'paused') setPhase('paused');
-    else setPhase(res.state.status === 'lobby' ? 'lobby' : 'waiting');
+      const active = res.activeQuestion;
+      setSkew(active.serverNow - Date.now());
+      setDeadline(active.deadline);
+      setQuestion(active.question);
+      const changed = currentQuestionIndex.current !== active.question.index;
+      if (changed) {
+        currentQuestionIndex.current = active.question.index;
+        setSelected([]);
+        setResult(null);
+      }
+      const pending = getPendingAnswer(pin);
+      if (active.alreadyAnswered) {
+        clearPendingAnswer(pin);
+        setPhase('waiting');
+      } else if (pending && pending.questionIndex === active.question.index) {
+        // A failed POST can be resent safely; MongoDB rejects duplicate answers.
+        setPhase('waiting');
+        void answerLive(pin, playerId, pending.questionIndex, pending.answer)
+          .then(r => { if (r.ok || r.late) clearPendingAnswer(pin); })
+          .catch(() => {});
+      } else if (res.state.status === 'paused') setPhase('paused');
+      else setPhase('question');
+    } else {
+      setPhase('lobby');
+    }
   };
 
   useEffect(() => {
-    const socket = getSocket();
+    let disposed = false;
+    let failCount = 0;
     const name = localStorage.getItem('nickname') || 'Player';
-
-    const rejoin = () => socket.emit('player:join', { pin, playerId, name }, (res: any) => {
-      if (res?.error) { toast.error(res.error); return navigate('/join'); }
-      applyJoined(res);
-      // Re-send any answer that was saved before a disconnect
-      const pending = getPendingAnswer(pin);
-      if (pending && res.activeQuestion && !res.activeQuestion.alreadyAnswered &&
-          pending.questionIndex === res.activeQuestion.question.index) {
-        socket.emit('player:answer', { pin, playerId, questionIndex: pending.questionIndex, answer: pending.answer }, (r: any) => {
-          if (r?.ok) { clearPendingAnswer(pin); setPhase('waiting'); }
-          if (r?.late) clearPendingAnswer(pin);
-        });
-      } else if (pending) clearPendingAnswer(pin);
-    });
-
-    if (state?.joined) applyJoined(state.joined);
-    else if (socket.connected) rejoin();
-    const reconnected = () => { setConnectionError(false); rejoin(); };
-    socket.on('connect', reconnected);
-    const connectTimer = window.setTimeout(() => {
-      if (!socket.connected) setConnectionError(true);
-    }, 12000);
-
-    const onLobby = (s: any) => setPlayerCount(s.players.length);
-    const onShow = ({ question, deadline, serverNow }: any) => {
-      clearPendingAnswer(pin);
-      setSkew(serverNow - Date.now());
-      setQuestion(question); setDeadline(deadline);
-      setSelected([]); setResult(null); setPhase('question');
+    const poll = async () => {
+      if (loading.current || disposed) return;
+      loading.current = true;
+      try {
+        const res = await liveState(pin, playerId);
+        if (!disposed) { applyJoined(res); setConnectionError(false); failCount = 0; }
+      } catch (e) {
+        if (++failCount >= 3 && !disposed) setConnectionError(true);
+      } finally { loading.current = false; }
     };
-    const onResult = (data: any) => {
-      setMe({ score: data.score, streak: data.streak });
-      setResult(data); setPhase('result');
+    const start = async () => {
+      try {
+        await joinLive(pin, playerId, name);
+        if (!disposed) await poll();
+      } catch (e) {
+        if (!disposed) {
+          setConnectionError(true);
+          if (e instanceof Error && /removed from this game/i.test(e.message)) setPhase('kicked');
+          toast.error(e instanceof Error ? e.message : 'Cannot join live quiz.');
+        }
+      }
     };
-    const onPaused = () => phaseRef.current === 'question' && setPhase('paused');
-    const onResumed = ({ deadline, serverNow }: any) => {
-      setSkew(serverNow - Date.now()); setDeadline(deadline);
-      if (phaseRef.current === 'paused') setPhase('question');
-    };
-    const onOver = (data: any) => { clearPendingAnswer(pin); setFinale(data); setPhase('over'); };
-    const onKicked = () => { setPhase('kicked'); toast.error('The host removed you from this game.'); };
+    void start();
+    const interval = window.setInterval(() => void poll(), 1400);
+    return () => { disposed = true; window.clearInterval(interval); };
+  }, [pin, playerId]);
 
-
-    socket.on('lobby:state', onLobby);
-    socket.on('question:show', onShow);
-    socket.on('player:result', onResult);
-    socket.on('game:paused', onPaused);
-    socket.on('game:resumed', onResumed);
-    socket.on('game:over', onOver);
-    socket.on('player:kicked', onKicked);
-
-    return () => {
-      socket.off('lobby:state', onLobby); socket.off('question:show', onShow);
-      socket.off('player:result', onResult); socket.off('game:paused', onPaused);
-      socket.off('game:resumed', onResumed); socket.off('game:over', onOver);
-      socket.off('player:kicked', onKicked); socket.off('connect', reconnected);
-      window.clearTimeout(connectTimer);
-    };
-  }, [pin]); // eslint-disable-line
-
-  const submit = (answer: number[]) => {
+  const submit = async (answer: number[]) => {
     const q = questionRef.current;
     if (!q || phaseRef.current !== 'question') return;
-    savePendingAnswer(pin, q.index, answer);      // persist BEFORE sending
+    savePendingAnswer(pin, q.index, answer);
     setSelected(answer);
     setPhase('waiting');
-    getSocket().emit('player:answer', { pin, playerId, questionIndex: q.index, answer }, (res: any) => {
-      if (res?.ok || res?.late) clearPendingAnswer(pin);
-      if (res?.late) toast('Time was up before your answer arrived.');
-      else if (res?.error && res.error !== 'stale') {
-        setPhase('question'); toast.error(res.error);
-      }
-    });
+    try {
+      const res = await answerLive(pin, playerId, q.index, answer);
+      if (res.ok || res.late) clearPendingAnswer(pin);
+      if (res.late) toast('Time was up before your answer arrived.');
+    } catch (e) {
+      // Keep the pending answer on network failure so the poll can replay it.
+      toast.error(e instanceof Error ? e.message : 'Could not submit. Retrying…');
+    }
   };
 
   const tap = (i: number) => {
@@ -156,8 +149,8 @@ export default function Play() {
   if (phase === 'connecting') return connectionError ? shell(
     <div className="card mt-10 p-6 text-center">
       <h1 className="font-bold">Unable to connect to live game</h1>
-      <p className="mt-2 text-sm text-ink/60 dark:text-fog/60">Check your internet connection or ask the host to restart the live server.</p>
-      <button onClick={() => { setConnectionError(false); getSocket().connect(); }} className="btn-primary mt-5 w-full">Retry</button>
+      <p className="mt-2 text-sm text-ink/60 dark:text-fog/60">Check your internet connection or check that the live quiz API is reachable.</p>
+      <button onClick={() => window.location.reload()} className="btn-primary mt-5 w-full">Retry</button>
       <button onClick={() => navigate('/join')} className="btn-ghost mt-2 w-full">Back to join</button>
     </div>
   ) : <div className="grid min-h-dvh place-items-center"><Spinner className="h-8 w-8" /></div>;

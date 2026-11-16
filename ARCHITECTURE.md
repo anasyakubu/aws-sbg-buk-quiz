@@ -1,76 +1,44 @@
-# AWS Student Builder Group BUK Quiz Platform — Architecture
+# Architecture — Vercel-compatible quiz app
 
-## 1. System overview
+Frontend: Vite 6, React 18, TypeScript, Tailwind CSS, vite-plugin-pwa.
+API: Express 4, TypeScript, JWT authentication, MongoDB/Mongoose.
 
-```
-                     ┌────────────────────┐ ┌────────────────┐
-                     │  Node.js + Express │ │  React (Vite)  │
-                     │  Socket.IO server  │◄┤  PWA, SW cache │
-                     │  (persistent host) │ │  (Vercel/CDN)  │
-                     └──┬──────┬──────┬───┘ └────────────────┘
-                        │      │      │   VITE_API_URL points the
-                        │      │      │   browser at the API origin
-                        │      │      │
-                ┌───────▼─┐ ┌──▼───┐ ┌▼──────────────┐
-                │ MongoDB │ │Redis*│ │ OpenAI /      │
-                │ (data)  │ │(scale│ │ Anthropic API │
-                └─────────┘ │ +jobs)└───────────────-┘
-                            └──────┘
-* Redis is optional in development. In production it powers the
-  Socket.IO adapter (multi-instance fan-out) and BullMQ jobs.
-```
+## Active game flow
 
-## 2. Core design decisions
+- `POST /api/live/create` records quiz metadata and the question snapshot in
+  the MongoDB `LiveGame` collection; returns an unpredictable six-digit PIN.
+- `POST /api/live/:pin/join` records one `LivePlayer` document per participant,
+  with a stable browser-generated UUID. Players can reconnect without losing
+  their score. Kicked players cannot rejoin with the same UUID.
+- `GET /api/live/:pin/state` returns a host snapshot, or a private player
+  snapshot using a `playerId` query string. The browser polls every ~1.4 sec.
+- Host actions run through `POST /api/live/:pin/host/:command`. The API verifies
+  the host's JWT against the game's owner and conditionally changes state.
+- Participant answers are validated and scored on the server, with an atomic
+  MongoDB update on the participant document. Duplicate submissions are rejected
+  by the `answers.questionIndex` filter.
+- Question timeout is enforced by server-authoritative deadlines. If no
+  browser is connected at the deadline, the first subsequent read/command
+  transitions it to the reveal state. Pauses store the remaining duration.
+- On game completion, the final leaderboard is stored in `LiveGame`, and a
+  `GameResult` report is written for history.
 
-| Concern | Decision | Why |
-|---|---|---|
-| Live game state | In-memory `GameManager` keyed by PIN, snapshot-persisted to MongoDB on game end | Sub-millisecond reads during a question; a quiz session is ephemeral. Redis adapter added for horizontal scale. |
-| Reconnection | Stable `playerId` (UUID in localStorage) decoupled from `socket.id` | A dropped socket never loses a player's score. 45s grace window before a player is shown as "left". |
-| Answer safety | Client writes the answer to localStorage **before** emitting; re-emits on reconnect; server dedupes per (player, question) | Answers survive brief disconnects on campus Wi-Fi. |
-| Scoring | `500 + round(500 × timeRemaining/timeLimit) + min(streak,5)×50` for correct answers | Kahoot-style speed reward, bounded streak bonus. Computed server-side only. |
-| Auth | JWT (7d) via bcrypt-hashed credentials or Google OAuth (Passport) | Stateless API; sockets authenticate with the same token or as anonymous participants. |
-| AI generation | Provider-agnostic service; strict JSON prompt + Zod validation of model output | Host reviews/edits every question before publishing — AI output never goes live unreviewed. |
-| Low bandwidth | compression middleware, payloads stripped of correct answers until reveal, PWA precache, exponential Socket.IO backoff | Optimized for unstable university networks. |
+No live data depends on process-local state or Socket.IO sticky routing.
+Vercel Functions are stateless and can scale across instances. The original
+socket module is retained as an optional local legacy backend; the PWA uses
+HTTP for live sessions.
 
-## 3. Data model (MongoDB)
+## Security
 
-- **User** — email, passwordHash?, googleId?, name, role (`admin | host | participant`), institution, department, avatarUrl
-- **Quiz** — owner, title, description, category, embedded `questions[]` (type, text, options, correctIndexes, explanation, timeLimit, points, code/markdown, imageUrl), visibility, timestamps
-- **GameResult** — quizId, hostId, pin, startedAt/endedAt, players[] (name, userId?, score, correct, accuracy, avgMs), perQuestion stats (for analytics)
+JWT required to host games or execute host controls. Players can join by PIN,
+can only view their own current scores/results (correct answers are omitted
+until reveal), and answer indexes are checked against the live question.
+The API excludes correct answer indices from active question snapshots.
+Mongoose update predicates prevent duplicate submissions across serverless
+instances. MongoDB, JWT secrets, Google OAuth and AI provider secrets must
+all be configured in the Vercel API project.
 
-Question `type` enum already covers the full roadmap:
-`multiple_choice | true_false | multiple_answer | fill_blank | code_output | ordering | image`.
-The editor ships MCQ / true-false / multiple-answer / code-output first; the schema requires no migration to enable the rest.
+## Production
 
-## 4. Socket.IO event contract
-
-Host → server: `host:create` `host:start` `host:next` `host:skip` `host:pause` `host:resume` `host:end` `host:kick`
-Player → server: `player:join` `player:answer` `player:rejoin`
-Server → clients: `lobby:state` `question:show` `question:tick` `question:end` `player:result` `leaderboard:update` `game:paused` `game:resumed` `game:over` `game:error` `player:kicked`
-
-Payloads sent to players never contain correct answers until `question:end`.
-
-## 5. Delivery phases
-
-1. ✅ Architecture, monorepo, tooling
-2. ✅ Database design (all schemas)
-3. ✅ Backend API (auth, quizzes, AI, results)
-4. ✅ Authentication (JWT, bcrypt, profile)
-5. ✅ Google OAuth
-6. ✅ Socket.IO real-time game engine
-7. ✅ AI integration (OpenAI + Anthropic, host review flow)
-8. ✅ Quiz engine (create/edit/host/play, 4 question types live)
-9. ✅ Leaderboard engine (speed scoring, streaks, top-10, animations)
-10. ✅ Frontend UI (design system, dark/light, mobile-first)
-11. ✅ Mobile optimization (touch targets, responsive layouts)
-12. ✅ Offline & low-network (reconnect, answer recovery, status banner, PWA)
-13. ▶ Analytics dashboard (data already captured in GameResult)
-14. ✅ PWA (manifest, service worker via vite-plugin-pwa)
-15. ▶ Testing (Vitest/Supertest harness — next phase)
-16. ✅ Deployment configs (Vercel for client + REST API, PM2 for the live-game host)
-17. ▶ Redis-backed game state (needed before the API can run multi-instance or serverless)
-18. ✅ Documentation (README, env, API, socket contract)
-
-▶ = scaffolded and scheduled for the next iteration, alongside: admin panel,
-badges, PDF certificates, import/export, remaining question types, scheduling,
-question bank UI, push notifications, BullMQ report jobs.
+Two Vercel projects with Root Directories `client` and `server`; shared
+MongoDB Atlas. See `DEPLOYMENT.md`.

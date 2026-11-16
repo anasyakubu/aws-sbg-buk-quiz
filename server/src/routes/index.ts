@@ -9,6 +9,7 @@ import * as ai from '../controllers/ai.controller';
 import * as results from '../controllers/result.controller';
 import { signToken } from '../utils/jwt';
 import { env } from '../config/env';
+import live from './live';
 
 const router = Router();
 
@@ -49,11 +50,14 @@ router.delete('/quizzes/:id', requireAuth, quiz.deleteQuiz);
 router.get('/ai/providers', requireAuth, ai.providers);
 router.post('/ai/generate', requireAuth, aiLimiter, validate(ai.generateSchema), ai.generate);
 
+// ---- Vercel-compatible live quiz (database-backed, HTTP state updates) ----
+router.use('/live', live);
+
 // ---- Results / history ----
 router.get('/results/hosted', requireAuth, results.hostedGames);
 router.get('/results/history', requireAuth, results.myHistory);
 router.get('/results/:id', requireAuth, results.gameDetail);
 
-router.get('/health', (req, res) => res.json({ ok: true, realtime: req.app.locals.realtimeEnabled === true, ts: Date.now() }));
+router.get('/health', (req, res) => res.json({ ok: true, realtime: true, transport: 'http-polling', websocketRequired: false, ts: Date.now() }));
 
 export default router;

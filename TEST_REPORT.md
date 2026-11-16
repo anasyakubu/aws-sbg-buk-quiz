@@ -1,36 +1,38 @@
-# Test and verification report
+# Verification report — Vercel HTTP live quiz / PWA
 
-## Completed in the provided environment
+## Completed locally
 
-- Inspected all files in the uploaded source archive and reviewed deployment, PWA, API and live-game code.
-- Parsed 51 TypeScript/JavaScript project files with the TypeScript compiler parser: **0 syntax errors**.
-- Ran `server/tests/realtime.contract.test.cjs`: **3 tests passed, 0 failed**.
-  - Host creation, anonymous joining, answer validation, result persistence and reconnection snapshots.
-  - Kicked-player blocking and room removal.
-  - Pause recovery, restored questions and socket-bound answer validation.
-- Validated local JSON files, Render Blueprint YAML and the existing 192px/512px app icons.
-- Added post-deployment live Socket.IO check: `cd client && npm run check:realtime -- https://YOUR-BACKEND`.
+- **5/5 Node.js tests passed** using `node --test server/tests/*.test.cjs`.
+  - 2 Vercel-compatible HTTP route / MongoDB-state contract tests (database mocked):
+    creation, anonymous join, host JWT enforcement, player-safe snapshots,
+    server-side answer validation/scoring, duplicate replay protection, early
+    reveal, leaderboard results, final report once, pause/resume, expiry, kick.
+  - 3 existing legacy Socket.IO game-engine tests passed.
+- **50 frontend/backend TypeScript/TSX sources parsed** without syntax errors
+  using the installed TypeScript transpiler (this is not full type checking).
+- The Vercel API entry is now `server/src/app.ts`; legacy standalone entry
+  renamed `server/src/local.ts` to avoid accidental auto-detection.
+- Browser code uses `/api/live` requests. It no longer imports Socket.IO client
+  or requests `/socket.io/?EIO=4`.
+- Client HTML has `mobile-web-app-capable`, and Vite PWA configuration and icon
+  files are included.
+- The ZIP archive integrity was checked after packaging.
 
-## Not verifiable in this environment
+## Not verified in this environment
 
-The npm registry could not be reached during dependency installation. An offline `npm ci` exited with `ENOTCACHED` (missing `yallist-3.1.1.tgz`). Consequently, **the full Vite PWA production build and server typecheck have not run here**, and physical-device/browser PWA installation was not tested. No live MongoDB credentials, domain access, or production deployment were provided, so production integration cannot be guaranteed before deployment.
+- `npm ci`, full `tsc` project builds, `vite build`, or Chrome/Safari UI tests.
+  Installing npm dependencies was blocked/unavailable in this runtime.
+- A real MongoDB Atlas integration test and a multi-device live game on your
+  deployed Vercel projects: those need your MongoDB credentials and Vercel
+  deployment settings, which were not provided and are not included in the ZIP.
+- OAuth and AI-provider requests, which require third-party API credentials.
 
-Run on a machine or CI runner with npm access:
+## How to verify after deploying
 
-```bash
-cd server
-npm ci
-npm test
-npm run build
-cd ../client
-npm ci
-npm run build
-```
+1. Redeploy **API** from `server/` and **frontend** from `client/`.
+2. Confirm `/api/health` shows `"transport":"http-polling"`.
+3. From `client/`: `npm run check:realtime -- https://YOUR-API.vercel.app`.
+4. Join one room from two devices, start/answer/pause/reveal/end, reload,
+   inspect the report, and test PWA installation on a supported device.
 
-Then deploy as documented in `DEPLOYMENT.md`, check `/api/health` reports `"realtime":true`, and run the live smoke test. Check mobile install, host-refresh, and phone reconnect with real devices.
-
-## Architectural limitations
-
-- One persistent game backend instance is required by the current in-memory game model.
-- Active quiz state is lost on backend restarts, though previously persisted results and quizzes remain in MongoDB.
-- PWA static pages can be cached, but real-time gameplay requires network access.
+Expected live-update latency is about 1–2 seconds, not WebSocket immediacy.

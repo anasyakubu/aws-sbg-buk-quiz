@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { ArrowRight } from 'lucide-react';
-import { socketAck } from '../lib/socket';
+import { joinLive } from '../lib/live';
 import { getPlayerId } from '../lib/player';
 import { useAuth } from '../context/AuthContext';
 import { Field, Spinner } from '../components/ui';
@@ -25,12 +25,9 @@ export default function Join() {
     if (!nickname) return toast.error('Pick a nickname so everyone knows who you are.');
     setBusy(true);
     try {
-      const res = await socketAck<{ error?: string; state?: unknown; you?: unknown }>(
-        'player:join', { pin: cleanPin, playerId: getPlayerId(), name: nickname }
-      );
-      if (res?.error) return toast.error(res.error);
+      await joinLive(cleanPin, getPlayerId(), nickname);
       localStorage.setItem('nickname', nickname);
-      navigate(`/play/${cleanPin}`, { state: { joined: res } });
+      navigate(`/play/${cleanPin}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Unable to join. Try again.');
     } finally { setBusy(false); }

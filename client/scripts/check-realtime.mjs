@@ -1,33 +1,23 @@
-// Usage: npm run check:realtime -- https://your-api.example.com
-import { io } from 'socket.io-client';
-
+// npm run check:realtime -- https://your-api-project.vercel.app
+// Verifies the MongoDB-backed HTTP live-quiz API without requiring a WebSocket.
 const origin = process.argv[2]?.replace(/\/$/, '');
 if (!origin || !/^https?:\/\//.test(origin)) {
-  console.error('Usage: npm run check:realtime -- https://your-backend-domain');
+  console.error('Usage: npm run check:realtime -- https://your-vercel-api-domain');
   process.exit(2);
 }
-
-const health = await fetch(`${origin}/api/health`, { signal: AbortSignal.timeout(12000) });
-const data = await health.json();
-if (!health.ok || data.ok !== true || data.realtime !== true) {
-  throw new Error(`The API is not running the real-time Node server: ${JSON.stringify(data)}`);
+const api = async path => {
+  const response = await fetch(`${origin}${path}`, { signal: AbortSignal.timeout(15000), cache: 'no-store' });
+  const body = await response.json().catch(() => ({}));
+  return { status: response.status, data: body };
+};
+const health = await api('/api/health');
+if (health.status !== 200 || health.data?.ok !== true || health.data?.transport !== 'http-polling') {
+  throw new Error(`Expected HTTP live transport at /api/health, got: ${JSON.stringify(health)}`);
 }
-console.log('OK: API health check confirms realtime is enabled');
-
-const socket = io(origin, { transports: ['websocket'], timeout: 10000, reconnection: false });
-try {
-  await new Promise((resolve, reject) => {
-    socket.once('connect', resolve);
-    socket.once('connect_error', err => reject(new Error(`Socket.IO connection failed: ${err.message}`)));
-    setTimeout(() => reject(new Error('WebSocket handshake timed out')), 12000);
-  });
-  console.log('OK: Socket.IO WebSocket connected');
-  const result = await new Promise((resolve, reject) => {
-    socket.timeout(5000).emit('host:rejoin', { pin: '000000' }, (err, response) => {
-      if (err) reject(new Error('Socket.IO event acknowledgement timed out'));
-      else resolve(response);
-    });
-  });
-  if (!result || result.error !== 'Game not found.') throw new Error(`Unexpected response: ${JSON.stringify(result)}`);
-  console.log('OK: Live-game event handler responded — backend is correctly deployed');
-} finally { socket.disconnect(); }
+console.log('OK: API is running the Vercel-compatible live quiz transport');
+const missing = await api('/api/live/not-a-pin/state');
+if (missing.status !== 404 || !/game not found/i.test(missing.data?.error || '')) {
+  throw new Error(`The live quiz route is missing or misrouted: ${JSON.stringify(missing)}`);
+}
+console.log('OK: Live game state endpoint routed correctly (unknown PIN returns game not found)');
+console.log('To fully test gameplay, sign in, host a quiz and join it from a second device.');

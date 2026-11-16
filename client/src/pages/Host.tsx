@@ -4,7 +4,7 @@ import QRCode from 'react-qr-code';
 import toast from 'react-hot-toast';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Play, SkipForward, Pause, Square, ArrowRight, Copy, Users, X } from 'lucide-react';
-import { getSocket, socketAck } from '../lib/socket';
+import { createLiveGame, liveState, hostLive } from '../lib/live';
 import type { LeaderboardEntry, PublicQuestion } from '../lib/types';
 import { Spinner } from '../components/ui';
 import { Logo } from '../components/Logo';
@@ -31,117 +31,87 @@ export default function Host() {
   const pinRef = useRef('');
   const [connectionError, setConnectionError] = useState('');
 
+  const refresh = async (gamePin: string) => {
+    const res = await liveState<any>(gamePin);
+    if (!res?.state) throw new Error('Invalid live game response.');
+    setPin(gamePin);
+    setQuizTitle(res.state.quizTitle);
+    setPlayers(res.state.players || []);
+    setLeaderboard(res.leaderboard || []);
+    setAnswered(res.answered || { answered: 0, total: 0 });
+    if (res.activeQuestion) {
+      setQuestion(res.activeQuestion.question);
+      setDeadline(res.activeQuestion.deadline);
+      setSkew(res.activeQuestion.serverNow - Date.now());
+    }
+    setReveal(res.reveal || null);
+    if (res.finale) setFinale(res.finale);
+    setPhase(res.state.status === 'ended' ? 'over' : res.state.status);
+  };
+
   useEffect(() => {
-    const socket = getSocket();
     let disposed = false;
+    let busy = false;
+    let errors = 0;
     const storageKey = `hosting:${quizId}`;
-
-    const onLobby = (data: any) => setPlayers(data.players);
-    const onShow = ({ question, deadline, serverNow }: any) => {
-      setSkew(serverNow - Date.now());
-      setQuestion(question); setDeadline(deadline); setReveal(null);
-      setAnswered({ answered: 0, total: 0 }); setPhase('question');
-    };
-    const onEnd = (data: any) => { setReveal(data); setPhase('reveal'); };
-    const onLb = ({ leaderboard }: any) => setLeaderboard(leaderboard);
-    const onCount = (data: any) => setAnswered(data);
-    const onPaused = () => setPhase('paused');
-    const onResumed = ({ deadline, serverNow }: any) => {
-      setSkew(serverNow - Date.now()); setDeadline(deadline); setPhase('question');
-    };
-    const onOver = (data: any) => { setFinale(data); setPhase('over'); };
-
-    const onConnected = async () => {
-      if (disposed) return;
-      setConnectionError('');
-      const previousPin = pinRef.current || sessionStorage.getItem(storageKey);
-      if (previousPin) {
-        try {
-          const res = await socketAck<any>('host:rejoin', { pin: previousPin });
-          if (disposed) return;
-          if (!res?.error && res?.state) {
-            pinRef.current = previousPin;
-            setPin(previousPin);
-            setQuizTitle(res.state.quizTitle);
-            setPlayers(res.state.players);
-            setLeaderboard(res.leaderboard || []);
-            setAnswered(res.answered || { answered: 0, total: 0 });
-            if (res.activeQuestion) {
-              setQuestion(res.activeQuestion.question);
-              setDeadline(res.activeQuestion.deadline);
-              setSkew(res.activeQuestion.serverNow - Date.now());
-            }
-            setReveal(res.reveal || null);
-            if (res.finale) setFinale(res.finale);
-            setPhase(res.state.status === 'ended' ? 'over' : res.state.status);
-            return;
-          }
-          // Game expired or server restarted: start a fresh lobby.
-          pinRef.current = '';
-          sessionStorage.removeItem(storageKey);
-        } catch (err) {
-          if (!disposed) setConnectionError(err instanceof Error ? err.message : 'Unable to restore this game.');
-          return;
-        }
-      }
+    const initialize = async () => {
       try {
-        const res = await socketAck<any>('host:create', { quizId });
+        let existingPin = pinRef.current || sessionStorage.getItem(storageKey) || '';
+        if (existingPin) {
+          try { await liveState(existingPin); }
+          catch (err) {
+            // Expired games are replaced; temporary API errors must not create duplicate rooms.
+            if (err instanceof Error && /not found or expired/i.test(err.message)) {
+              sessionStorage.removeItem(storageKey);
+              sessionStorage.removeItem(`host-session:${quizId}`);
+              existingPin = '';
+            } else throw err;
+          }
+        }
+        if (!existingPin) {
+          const created = await createLiveGame(quizId!);
+          existingPin = created.pin;
+          sessionStorage.setItem(storageKey, existingPin);
+        }
         if (disposed) return;
-        if (res?.error) { toast.error(res.error); navigate('/dashboard'); return; }
-        pinRef.current = res.pin;
-        sessionStorage.setItem(storageKey, res.pin);
-        setPin(res.pin); setQuizTitle(res.quizTitle); setPhase('lobby');
+        pinRef.current = existingPin;
+        await refresh(existingPin);
+        setConnectionError('');
       } catch (err) {
-        if (!disposed) setConnectionError(err instanceof Error ? err.message : 'Unable to connect to the live server.');
+        if (!disposed) setConnectionError(err instanceof Error ? err.message : 'Unable to reach the live API.');
       }
     };
-
-    socket.on('lobby:state', onLobby);
-    socket.on('question:show', onShow);
-    socket.on('question:end', onEnd);
-    socket.on('leaderboard:update', onLb);
-    socket.on('host:answer-count', onCount);
-    socket.on('game:paused', onPaused);
-    socket.on('game:resumed', onResumed);
-    socket.on('game:over', onOver);
-    socket.on('connect', onConnected);
-    const initialTimeout = window.setTimeout(() => {
-      if (!socket.connected && !disposed) {
-        setConnectionError('The live server could not be reached.');
-      }
-    }, 12000);
-    if (socket.connected) void onConnected();
-    return () => {
-      disposed = true;
-      window.clearTimeout(initialTimeout);
-      socket.off('lobby:state', onLobby); socket.off('question:show', onShow);
-      socket.off('question:end', onEnd); socket.off('leaderboard:update', onLb);
-      socket.off('host:answer-count', onCount); socket.off('game:paused', onPaused);
-      socket.off('game:resumed', onResumed); socket.off('game:over', onOver);
-      socket.off('connect', onConnected);
-    };
-  }, [quizId, navigate]);
+    void initialize();
+    const timer = window.setInterval(async () => {
+      if (!pinRef.current || busy || disposed) return;
+      busy = true;
+      try { await refresh(pinRef.current); errors = 0; if (!disposed) setConnectionError(''); }
+      catch (err) {
+        if (++errors >= 3 && !disposed) setConnectionError(err instanceof Error ? err.message : 'Live API connection lost.');
+      } finally { busy = false; }
+    }, 1400);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [quizId]); // live updates are read from MongoDB, not socket events
 
   const cmd = async (event: string) => {
     try {
-      const res = await socketAck<any>(event, { pin });
-      if (res?.error) toast.error(res.error);
+      const command = event.replace('host:', '');
+      await hostLive(pin, command);
+      await refresh(pin);
     } catch (err) { toast.error(err instanceof Error ? err.message : 'Command failed.'); }
   };
   const kick = async (playerId: string) => {
-    try {
-      const res = await socketAck<any>('host:kick', { pin, playerId });
-      if (res?.error) toast.error(res.error);
-    } catch (err) { toast.error(err instanceof Error ? err.message : 'Unable to remove player.'); }
+    try { await hostLive(pin, 'kick', { playerId }); await refresh(pin); }
+    catch (err) { toast.error(err instanceof Error ? err.message : 'Unable to remove player.'); }
   };
   const joinUrl = `${location.origin}/join?pin=${pin}`;
   const copy = () => navigator.clipboard.writeText(joinUrl).then(() => toast.success('Invite link copied')).catch(() => toast.error('Could not copy link.')); 
 
   if (phase === 'creating') return connectionError ? (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-4 px-5 text-center">
-      <h1 className="text-xl font-bold">Live quiz server unavailable</h1>
-      <p role="alert" className="text-sm text-ink/60 dark:text-fog/60">{connectionError} Make sure VITE_API_URL points to the running Node.js backend, not a REST-only serverless API.</p>
-      <button className="btn-primary" onClick={() => { setConnectionError(''); getSocket().connect(); }}>Retry connection</button>
+      <h1 className="text-xl font-bold">Live quiz API unavailable</h1>
+      <p role="alert" className="text-sm text-ink/60 dark:text-fog/60">{connectionError} Make sure VITE_API_URL points to your deployed Vercel API and MongoDB is configured.</p>
+      <button className="btn-primary" onClick={() => window.location.reload()}>Retry connection</button>
       <button className="btn-ghost" onClick={() => navigate('/dashboard')}>Back to dashboard</button>
     </main>
   ) : <div className="grid min-h-dvh place-items-center"><Spinner className="h-8 w-8" /></div>;
@@ -198,6 +168,7 @@ export default function Host() {
             ? <Countdown deadline={deadline} skew={skew} timeLimit={question.timeLimit} />
             : <p className="rounded-lg bg-amber-aws/15 px-4 py-2.5 text-center text-sm font-bold">Paused</p>}
           <h2 className="mt-5 text-balance text-2xl font-extrabold sm:text-3xl">{question.text}</h2>
+          {question.imageUrl && <img src={question.imageUrl} alt="Question illustration" className="mt-4 max-h-64 w-full rounded-lg object-contain" />}
           {question.code && <pre className="mt-4 overflow-x-auto rounded-lg bg-ink p-4 font-mono text-sm text-fog"><code>{question.code}</code></pre>}
           <div className="mt-6 grid gap-3 sm:grid-cols-2">
             {question.options.map((opt, i) => (
@@ -220,6 +191,7 @@ export default function Host() {
         <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
           <section className="card p-6 sm:p-8">
             <h2 className="text-balance text-2xl font-extrabold">{question.text}</h2>
+            {question.imageUrl && <img src={question.imageUrl} alt="Question illustration" className="mt-4 max-h-64 w-full rounded-lg object-contain" />}
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
               {question.options.map((opt, i) => {
                 const correct = reveal.correctIndexes.includes(i);
@@ -265,7 +237,12 @@ export default function Host() {
             })}
           </div>
           <div className="mt-8 text-left"><LeaderboardList entries={finale.leaderboard} /></div>
-          <button onClick={() => navigate('/dashboard')} className="btn-dark mt-8 w-full">Back to dashboard</button>
+          <button onClick={() => {
+            sessionStorage.removeItem(`hosting:${quizId}`);
+            sessionStorage.removeItem(`host-session:${quizId}`);
+            window.location.reload();
+          }} className="btn-primary mt-8 w-full">Host another session</button>
+          <button onClick={() => navigate('/dashboard')} className="btn-dark mt-3 w-full">Back to dashboard</button>
         </section>
       )}
     </main>

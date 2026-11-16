@@ -11,9 +11,9 @@ import routes from './routes';
 import { notFound, errorHandler } from './middleware/error';
 
 /**
- * Builds the Express app. The default export at the bottom is what Vercel's
- * Express preset picks up (it looks for src/app.ts exporting the app). The
- * long-running server in src/index.ts imports the same app and adds Socket.IO.
+ * Vercel detects src/app.ts as the Express function entry. This API uses
+ * MongoDB-backed /api/live routes so no persistent Socket.IO server is required.
+ * src/local.ts remains available for local long-running development.
  */
 export function createApp(): Express {
   configurePassport();
@@ -28,7 +28,12 @@ export function createApp(): Express {
 
   // NOTE: the in-memory store is per-instance. On Vercel each function
   // instance keeps its own counter, so this is a soft limit, not a hard one.
-  app.use(rateLimit({ windowMs: 60 * 1000, limit: 300, standardHeaders: true, legacyHeaders: false }));
+  app.use(rateLimit({
+    windowMs: 60 * 1000, limit: 300, standardHeaders: true, legacyHeaders: false,
+    // Many students can share one campus NAT IP. Read-only live state polling
+    // must not exhaust the shared per-IP limit; writes stay rate-limited.
+    skip: req => req.method === 'GET' && req.path.startsWith('/api/live/'),
+  }));
 
   // Serverless: make sure the (cached) DB connection is ready before any route
   // runs. On a persistent host this resolves instantly after the first call.

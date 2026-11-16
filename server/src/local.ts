@@ -6,9 +6,9 @@ import app from './app';
 import { registerGameHandlers } from './socket/game';
 
 /**
- * Long-running server: REST API + Socket.IO.
- * Use this on a persistent host (Render / Railway / Fly / EC2). Live games need
- * an always-on process, so this entry point is what runs real quiz sessions.
+ * Optional local Node server: HTTP API + legacy Socket.IO handlers.
+ * The Vercel frontend uses the durable MongoDB-backed /api/live routes instead.
+ * This file is intentionally NOT a Vercel auto-detected entry point.
  */
 async function main() {
   await connectDB();
