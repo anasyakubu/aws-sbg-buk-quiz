@@ -15,7 +15,7 @@ See `ARCHITECTURE.md` for system design, data model, and the phase roadmap.
 - **Low-network resilience**: automatic reconnect with exponential backoff, answers saved to localStorage before sending and re-sent after reconnect, players are never dropped mid-game, connection status banner, compressed payloads, PWA with offline shell caching
 - Game reports persisted (per-player scores/accuracy/response times + per-question stats) and score history for participants
 - Dark/light mode, mobile-first responsive UI, keyboard/ARIA accessibility, skeleton loaders and empty states
-- Vercel deployment configs for both packages, GitHub Actions CI, PM2 config for a persistent host
+- Vercel config for the frontend, Render Blueprint for the real-time backend, GitHub Actions CI, PM2 for a persistent host
 
 Coming in the next phases (schemas and hooks are already in place): admin panel, badges, PDF certificates, analytics dashboard UI, CSV/Excel/JSON import-export, question bank UI, scheduling, remaining question types, push notifications, Redis Socket.IO adapter + BullMQ jobs, automated tests.
 
@@ -33,12 +33,12 @@ Coming in the next phases (schemas and hooks are already in place): admin panel,
 # 2. Backend
 cd server
 cp .env.example .env        # edit JWT_SECRET at minimum
-npm install
+npm ci
 npm run dev                 # http://localhost:5000
 
 # 3. Frontend (new terminal)
 cd client
-npm install
+npm ci
 npm run dev                 # http://localhost:5173 (proxies /api and /socket.io to :5000)
 ```
 
@@ -71,54 +71,40 @@ The client reads one variable, `VITE_API_URL` (see `client/.env.example`): the o
 
 Add `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY` to `server/.env`. The generate page shows which providers are configured. Generation is rate-limited (30/hour per IP) and every AI draft must pass through the editor before it can be hosted.
 
-## Deploying
+## Deployment — live quiz + installable PWA
 
-### Important: live games need a persistent server
+**Important:** A quiz needs the Socket.IO server and the REST API on the **same
+always-on Node.js instance**. This project currently keeps live rooms, player
+scores and timers in process memory. A Vercel deployment of `server/src/app.ts`
+serves REST but does not initialize Socket.IO; pointing the browser at that URL
+causes `WebSocket connection failed` (or polling 404) when hosting a quiz.
 
-The REST API is stateless and runs fine on Vercel. **The live game engine does not.**
-`server/src/socket/game.ts` holds game state in memory and drives question timers with
-`setTimeout`; Vercel's serverless functions are short-lived, cannot hold WebSocket
-connections, and are not shared between invocations. Deployed only to Vercel, everything
-except hosting and playing a live game will work.
+Vercel has supported WebSockets since 2026, but merely turning them on would not
+make this project's per-process game state shared between Function instances.
+For this version, deploy a **single-instance persistent Node backend**.
 
-Two options:
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the exact Render + Vercel steps.
+`render.yaml` is provided for a Render Blueprint deployment. Railway, Fly.io,
+AWS EC2/Elastic Beanstalk, and other long-running Node hosts also work.
 
-**A. Client on Vercel, API on a persistent host (recommended).**
-Deploy `client/` to Vercel and `server/` to Render, Railway, Fly.io, or an EC2 box with
-PM2 (`ecosystem.config.js`). The server's start command is `npm run build && npm start`,
-which runs `src/index.ts` — REST + Socket.IO in one process. Set `VITE_API_URL` on Vercel
-to that host's origin; both REST calls and the socket connection follow it.
+1. Deploy the **backend** from the `server/` directory on a persistent host.
+   Build: `npm ci && npm run build`; start: `npm start`.
+2. Set `NODE_ENV=production`, `MONGODB_URI`, a strong `JWT_SECRET`,
+   `CLIENT_URL=https://<your-frontend-domain>`, and
+   `SERVER_URL=https://<your-backend-domain>` on the backend.
+3. Deploy the **frontend** from `client/` to Vercel and set
+   `VITE_API_URL=https://<your-backend-domain>` (not the old Vercel REST API).
+   Redeploy the frontend to bake the environment variable into the Vite bundle.
+4. Test `https://<your-backend-domain>/api/health` — it must say
+   `"realtime":true`. Check Socket.IO from `client/` with
+   `npm run check:realtime -- https://<your-backend-domain>`.
+5. Open the frontend over **HTTPS**. The install button on the landing page
+   prompts compatible browsers; iOS users can use Safari → Share → Add to Home Screen.
 
-**B. Both on Vercel (REST only).**
-`server/vercel.json` + `server/api/index.ts` wrap the Express app in a serverless function.
-Auth, the quiz builder, AI generation, and history all work. Hosting or joining a live game
-will not.
-
-### Client (Vercel)
-
-1. New project → root directory `client/`. `client/vercel.json` sets the Vite framework
-   preset, `dist` output, the SPA rewrite (so `/join/123456` doesn't 404 on refresh), and
-   immutable caching for hashed assets while keeping the service worker revalidating.
-2. Environment variable: `VITE_API_URL=https://<your-api-origin>` (no trailing slash).
-3. Deploy. Re-deploy after changing `VITE_API_URL` — Vite inlines it at build time.
-
-### API (Vercel)
-
-1. New project → root directory `server/`.
-2. Environment variables: `MONGODB_URI`, `JWT_SECRET`, `CLIENT_URL`, `SERVER_URL`,
-   plus the optional Google/AI keys. Set `NODE_ENV=production`.
-3. In MongoDB Atlas, allow network access from `0.0.0.0/0` — Vercel's function IPs are not
-   fixed. The Mongoose connection is cached on `globalThis` so warm invocations reuse it.
-4. Add `https://<your-api-origin>/api/auth/google/callback` to the authorized redirect URIs
-   in Google Cloud Console.
-
-`server/vercel.json` routes every request to `api/index.ts`, which awaits the cached DB
-connection and hands off to the Express app. Functions get 1 GB and a 30s ceiling, enough
-for AI generation.
-
-**Scaling note:** game state lives in server memory, so run one API instance. To scale
-horizontally, add `@socket.io/redis-adapter` and move game state to Redis — the code
-isolates all of it behind `server/src/socket/game.ts` to make that a contained change.
+The PWA caches static app assets only. A live quiz requires an internet connection;
+PWA installation does not make real-time gameplay work offline. Use one API
+instance until the quiz engine and sockets use shared storage/coordination; a
+Socket.IO adapter alone does not externalize this project's in-memory game map.
 
 ## API reference
 

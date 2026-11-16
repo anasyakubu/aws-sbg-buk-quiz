@@ -7,9 +7,11 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      includeAssets: ['icon.svg', 'icon-192.png', 'icon-512.png'],
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
         navigateFallbackDenylist: [/^\/api/, /^\/socket\.io/],
+        cleanupOutdatedCaches: true,
       },
       manifest: {
         name: 'AWS Student Builder Group BUK Quiz',
@@ -18,9 +20,14 @@ export default defineConfig({
         theme_color: '#16191F',
         background_color: '#FFFFFF',
         display: 'standalone',
+        start_url: '/',
+        scope: '/',
+        id: '/',
+        orientation: 'any',
         icons: [
           { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: '/icon-512.png', sizes: '512x512', type: 'image/png' }
+          { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+          { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
         ]
       }
     })

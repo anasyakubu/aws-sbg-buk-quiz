@@ -47,6 +47,8 @@ interface Game {
   players: Map<string, Player>;
   startedAt: number;
   perQuestionMs: Map<number, number[]>; // response times for analytics
+  bannedPlayers: Set<string>;
+  finalResult?: { quizTitle: string; podium: unknown[]; leaderboard: unknown[]; totalPlayers: number };
 }
 
 const games = new Map<string, Game>();
@@ -100,7 +102,7 @@ function scoreAnswer(q: IQuestion, answer: number[], ms: number, streak: number)
   if (!correct) return { correct: false, points: 0 };
   const timeLimitMs = q.timeLimit * 1000;
   const speedFactor = Math.max(0, 1 - ms / timeLimitMs); // 1 = instant, 0 = at deadline
-  const base = q.points || 1000;
+  const base = q.points ?? 1000;
   const points = Math.round(base * 0.5 + base * 0.5 * speedFactor) + Math.min(streak, 5) * 50;
   return { correct: true, points };
 }
@@ -128,38 +130,10 @@ function connectedPlayers(game: Game): number {
   return [...game.players.values()].filter(p => p.connected).length;
 }
 
-function endQuestion(io: Server, game: Game) {
-  if (game.status !== 'question') return;
-  clearTimeout(game.timer);
-  game.status = 'reveal';
+function questionSummary(game: Game) {
   const q = game.questions[game.currentIndex];
-
-  // players who didn't answer: break streak
-  for (const p of game.players.values()) {
-    const answered = p.answers.some(a => a.questionIndex === game.currentIndex);
-    if (!answered) p.streak = 0;
-  }
-
-  const lb = leaderboard(game);
-  // per-player private result
-  for (const p of game.players.values()) {
-    if (!p.socketId) continue;
-    const ans = p.answers.find(a => a.questionIndex === game.currentIndex);
-    io.to(p.socketId).emit('player:result', {
-      questionIndex: game.currentIndex,
-      answered: Boolean(ans),
-      correct: ans?.correct ?? false,
-      points: ans?.points ?? 0,
-      score: p.score,
-      streak: p.streak,
-      correctIndexes: q.correctIndexes,
-      explanation: q.explanation,
-      rank: lb.find(e => e.playerId === p.playerId)?.rank ?? null,
-    });
-  }
-
   const times = game.perQuestionMs.get(game.currentIndex) || [];
-  io.to(room(game.pin)).emit('question:end', {
+  return {
     questionIndex: game.currentIndex,
     correctIndexes: q.correctIndexes,
     explanation: q.explanation,
@@ -170,11 +144,45 @@ function endQuestion(io: Server, game: Game) {
       avgMs: times.length ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : 0,
     },
     isLast: game.currentIndex >= game.questions.length - 1,
-  });
+  };
+}
+
+function privateResult(game: Game, player: Player) {
+  const q = game.questions[game.currentIndex];
+  const ans = player.answers.find(a => a.questionIndex === game.currentIndex);
+  return {
+    questionIndex: game.currentIndex,
+    answered: Boolean(ans),
+    correct: ans?.correct ?? false,
+    points: ans?.points ?? 0,
+    score: player.score,
+    streak: player.streak,
+    correctIndexes: q.correctIndexes,
+    explanation: q.explanation,
+    rank: leaderboard(game, game.players.size).find(e => e.playerId === player.playerId)?.rank ?? null,
+  };
+}
+
+function endQuestion(io: Server, game: Game) {
+  if (game.status !== 'question') return;
+  clearTimeout(game.timer);
+  game.status = 'reveal';
+  // players who didn't answer: break streak
+  for (const p of game.players.values()) {
+    const answered = p.answers.some(a => a.questionIndex === game.currentIndex);
+    if (!answered) p.streak = 0;
+  }
+
+  const lb = leaderboard(game);
+  for (const p of game.players.values()) {
+    if (p.socketId) io.to(p.socketId).emit('player:result', privateResult(game, p));
+  }
+  io.to(room(game.pin)).emit('question:end', questionSummary(game));
   io.to(room(game.pin)).emit('leaderboard:update', { leaderboard: lb });
 }
 
 async function endGame(io: Server, game: Game) {
+  if (game.status === 'ended') return; // prevent double report writes
   clearTimeout(game.timer);
   game.status = 'ended';
   const sorted = [...game.players.values()].sort((a, b) => b.score - a.score);
@@ -190,12 +198,13 @@ async function endGame(io: Server, game: Game) {
     };
   });
 
-  io.to(room(game.pin)).emit('game:over', {
+  game.finalResult = {
     quizTitle: game.quizTitle,
     podium: finalPlayers.slice(0, 3),
     leaderboard: finalPlayers.slice(0, 10),
     totalPlayers: finalPlayers.length,
-  });
+  };
+  io.to(room(game.pin)).emit('game:over', game.finalResult);
 
   try {
     await GameResult.create({
@@ -239,6 +248,9 @@ export function registerGameHandlers(io: Server) {
         const quiz = await Quiz.findOne({ _id: quizId, owner: userId }).lean();
         if (!quiz) return ack?.({ error: 'Quiz not found.' });
         if (!quiz.questions.length) return ack?.({ error: 'Add at least one question before hosting.' });
+        if (quiz.questions.some(q => !['multiple_choice', 'true_false', 'multiple_answer', 'code_output', 'image'].includes(q.type))) {
+          return ack?.({ error: 'This quiz has an unsupported question type. Use multiple choice, true/false, multiple answer, image or code output.' });
+        }
 
         let pin = pinGen();
         while (games.has(pin)) pin = pinGen();
@@ -249,7 +261,7 @@ export function registerGameHandlers(io: Server) {
           questions: quiz.questions as IQuestion[],
           status: 'lobby', currentIndex: -1,
           questionStartedAt: 0, questionDeadline: 0, remainingOnPause: 0,
-          players: new Map(), startedAt: Date.now(), perQuestionMs: new Map(),
+          players: new Map(), startedAt: Date.now(), perQuestionMs: new Map(), bannedPlayers: new Set(),
         };
         games.set(pin, game);
         socket.join(room(pin));
@@ -272,7 +284,22 @@ export function registerGameHandlers(io: Server) {
       game.hostSocketId = socket.id;
       socket.join(room(pin));
       socket.join(hostRoom(pin));
-      ack?.({ state: lobbyState(game), leaderboard: leaderboard(game) });
+      const q = game.currentIndex >= 0 ? game.questions[game.currentIndex] : undefined;
+      ack?.({
+        state: lobbyState(game),
+        leaderboard: leaderboard(game),
+        answered: game.currentIndex >= 0 ? {
+          answered: [...game.players.values()].filter(p => p.answers.some(a => a.questionIndex === game.currentIndex)).length,
+          total: game.players.size,
+        } : { answered: 0, total: game.players.size },
+        activeQuestion: q ? {
+          question: publicQuestion(q, game.currentIndex, game.questions.length),
+          deadline: game.questionDeadline,
+          serverNow: Date.now(),
+        } : undefined,
+        reveal: game.status === 'reveal' ? questionSummary(game) : undefined,
+        finale: game.finalResult,
+      });
     });
 
     socket.on('host:start', ({ pin }: { pin: string }, ack) => {
@@ -316,6 +343,8 @@ export function registerGameHandlers(io: Server) {
       const game = asHost(pin);
       if (!game || game.status !== 'paused') return ack?.({ error: 'Game is not paused.' });
       game.status = 'question';
+      // Exclude the paused interval when computing the speed-based score.
+      game.questionStartedAt = Date.now() - (game.questions[game.currentIndex].timeLimit * 1000 - game.remainingOnPause);
       game.questionDeadline = Date.now() + game.remainingOnPause;
       game.timer = setTimeout(() => endQuestion(io, game), game.remainingOnPause);
       io.to(room(pin)).emit('game:resumed', { deadline: game.questionDeadline, serverNow: Date.now() });
@@ -333,8 +362,14 @@ export function registerGameHandlers(io: Server) {
       const game = asHost(pin);
       const player = game?.players.get(playerId);
       if (!game || !player) return ack?.({ error: 'Player not found.' });
-      if (player.socketId) io.to(player.socketId).emit('player:kicked');
+      if (player.socketId) {
+        io.to(player.socketId).emit('player:kicked');
+        const kickedSocket = io.sockets.sockets.get(player.socketId);
+        kickedSocket?.leave(room(pin));
+        if (kickedSocket) { kickedSocket.data.pin = undefined; kickedSocket.data.playerId = undefined; }
+      }
       clearTimeout(player.disconnectTimer);
+      game.bannedPlayers.add(playerId);
       game.players.delete(playerId);
       io.to(room(pin)).emit('lobby:state', lobbyState(game));
       ack?.({ ok: true });
@@ -342,9 +377,13 @@ export function registerGameHandlers(io: Server) {
 
     // ----- PLAYER -----
     socket.on('player:join', ({ pin, playerId, name }: { pin: string; playerId: string; name: string }, ack) => {
-      const game = games.get(pin);
+      const game = typeof pin === 'string' ? games.get(pin) : undefined;
       if (!game) return ack?.({ error: 'That game PIN was not found. Check it and try again.' });
-      if (game.status === 'ended') return ack?.({ error: 'This game has already ended.' });
+      if (typeof playerId !== 'string' || !/^[a-f0-9-]{32,48}$/i.test(playerId)) {
+        return ack?.({ error: 'Invalid player ID. Refresh the page and try again.' });
+      }
+      if (game.bannedPlayers.has(playerId)) return ack?.({ error: 'You were removed from this game.' });
+      if (game.status === 'ended' && !game.players.has(playerId)) return ack?.({ error: 'This game has already ended.' });
 
       const cleanName = String(name || '').trim().slice(0, 24);
       let player = game.players.get(playerId);
@@ -352,6 +391,9 @@ export function registerGameHandlers(io: Server) {
       if (player) {
         // reconnect: restore full state, keep score
         clearTimeout(player.disconnectTimer);
+        if (player.socketId && player.socketId !== socket.id) {
+          io.sockets.sockets.get(player.socketId)?.leave(room(pin));
+        }
         player.socketId = socket.id;
         player.connected = true;
       } else {
@@ -372,7 +414,7 @@ export function registerGameHandlers(io: Server) {
       socket.data.playerId = playerId;
 
       const state: any = { state: lobbyState(game), you: { name: player.name, score: player.score, streak: player.streak } };
-      if (game.status === 'question') {
+      if (game.status === 'question' || game.status === 'paused') {
         const q = game.questions[game.currentIndex];
         state.activeQuestion = {
           question: publicQuestion(q, game.currentIndex, game.questions.length),
@@ -381,6 +423,8 @@ export function registerGameHandlers(io: Server) {
           alreadyAnswered: player.answers.some(a => a.questionIndex === game.currentIndex),
         };
       }
+      if (game.status === 'reveal') state.revealedResult = privateResult(game, player);
+      if (game.status === 'ended') state.finale = game.finalResult;
       io.to(room(pin)).emit('lobby:state', lobbyState(game));
       ack?.(state);
     });
@@ -388,19 +432,23 @@ export function registerGameHandlers(io: Server) {
     socket.on('player:answer', ({ pin, playerId, questionIndex, answer }: { pin: string; playerId: string; questionIndex: number; answer: number[] }, ack) => {
       const game = games.get(pin);
       const player = game?.players.get(playerId);
-      if (!game || !player) return ack?.({ error: 'You are not in this game.' });
-      if (game.status !== 'question' || questionIndex !== game.currentIndex) {
+      if (!game || !player || player.socketId !== socket.id || game.bannedPlayers.has(playerId)) {
+        return ack?.({ error: 'You are not in this game.' });
+      }
+      if (game.status !== 'question' || questionIndex !== game.currentIndex || Date.now() > game.questionDeadline) {
         return ack?.({ error: 'stale', late: true }); // question already over — client discards pending answer
       }
       if (player.answers.some(a => a.questionIndex === questionIndex)) {
         return ack?.({ ok: true, duplicate: true }); // idempotent for reconnect re-sends
       }
-      if (!Array.isArray(answer) || answer.some(i => !Number.isInteger(i))) {
+      const q = game.questions[questionIndex];
+      if (!Array.isArray(answer) || answer.length < 1 || answer.length > q.options.length ||
+          (q.type !== 'multiple_answer' && answer.length !== 1) ||
+          new Set(answer).size !== answer.length ||
+          answer.some(i => !Number.isInteger(i) || i < 0 || i >= q.options.length)) {
         return ack?.({ error: 'Invalid answer.' });
       }
-
-      const q = game.questions[questionIndex];
-      const ms = Math.min(Date.now() - game.questionStartedAt, q.timeLimit * 1000);
+      const ms = Math.max(0, Math.min(Date.now() - game.questionStartedAt, q.timeLimit * 1000));
       const { correct, points } = scoreAnswer(q, answer, ms, player.streak);
       if (correct) { player.streak += 1; player.correct += 1; player.bestStreak = Math.max(player.bestStreak, player.streak); }
       else player.streak = 0;

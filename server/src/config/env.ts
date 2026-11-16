@@ -26,8 +26,8 @@ export const env = {
   // Lets Google OAuth build an absolute callback URL when running behind a proxy.
   serverUrl: (process.env.SERVER_URL || '').replace(/\/$/, ''),
 
-  mongoUri: required('MONGODB_URI', 'mongodb://localhost:27017/sbg-buk-quiz'),
-  jwtSecret: required('JWT_SECRET', 'dev-only-secret-change-in-production'),
+  mongoUri: required('MONGODB_URI', process.env.NODE_ENV === 'production' ? undefined : 'mongodb://localhost:27017/sbg-buk-quiz'),
+  jwtSecret: required('JWT_SECRET', process.env.NODE_ENV === 'production' ? undefined : 'dev-only-secret-change-in-production'),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID || '',

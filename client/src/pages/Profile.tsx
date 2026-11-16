@@ -43,9 +43,9 @@ export default function Profile() {
         <span className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-2xl bg-ink text-xl font-extrabold text-amber-aws dark:bg-paper dark:text-ink">
           {form.avatarUrl ? <img src={form.avatarUrl} alt="" className="h-full w-full object-cover" /> : (user?.name?.[0] || '?').toUpperCase()}
         </span>
-        <div>
-          <h1 className="text-2xl font-extrabold tracking-tight">{user?.name}</h1>
-          <p className="text-sm text-ink/55 dark:text-fog/55">{user?.email}</p>
+        <div className="min-w-0">
+          <h1 className="break-words text-2xl font-extrabold tracking-tight">{user?.name}</h1>
+          <p className="break-all text-sm text-ink/55 dark:text-fog/55">{user?.email}</p>
         </div>
       </div>
 

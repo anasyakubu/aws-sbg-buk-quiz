@@ -31,7 +31,7 @@ export default function Dashboard() {
           <h1 className="text-2xl font-extrabold tracking-tight">Your quizzes</h1>
           <p className="mt-1 text-sm text-ink/55 dark:text-fog/55">Hi {user?.name?.split(' ')[0]} — build one by hand or let AI draft it.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Link to="/generate" className="btn-ghost"><Sparkles className="h-4 w-4" /> Generate with AI</Link>
           <Link to="/quiz/new" className="btn-primary"><Plus className="h-4 w-4" /> New quiz</Link>
         </div>

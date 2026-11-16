@@ -12,7 +12,7 @@ export function Logo({ size = 34 }: { size?: number }) {
       />
       <span className="leading-tight">
         <span className="block text-[15px] font-bold tracking-tight">SBG BUK Quiz</span>
-        <span className="block text-[11px] font-medium text-ink/50 dark:text-fog/50">AWS Student Builder Group</span>
+        <span className="hidden text-[11px] font-medium sm:block text-ink/50 dark:text-fog/50">AWS Student Builder Group</span>
       </span>
     </span>
   );

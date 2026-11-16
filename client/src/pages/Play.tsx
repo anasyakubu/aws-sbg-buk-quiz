@@ -28,6 +28,7 @@ export default function Play() {
   const [me, setMe] = useState({ score: 0, streak: 0 });
   const [result, setResult] = useState<any>(null);
   const [finale, setFinale] = useState<any>(null);
+  const [connectionError, setConnectionError] = useState(false);
   const phaseRef = useRef<Phase>('connecting');
   phaseRef.current = phase;
   const questionRef = useRef<PublicQuestion | null>(null);
@@ -37,12 +38,19 @@ export default function Play() {
     setQuizTitle(res.state.quizTitle);
     setPlayerCount(res.state.players.length);
     setMe({ score: res.you.score, streak: res.you.streak });
-    if (res.state.status === 'ended') return setPhase('over');
+    if (res.state.status === 'ended') {
+      if (res.finale) setFinale(res.finale);
+      return setPhase('over');
+    }
+    if (res.state.status === 'reveal' && res.revealedResult) {
+      setResult(res.revealedResult);
+      return setPhase('result');
+    }
     if (res.activeQuestion) {
       setSkew(res.activeQuestion.serverNow - Date.now());
       setQuestion(res.activeQuestion.question);
       setDeadline(res.activeQuestion.deadline);
-      setPhase(res.activeQuestion.alreadyAnswered ? 'waiting' : 'question');
+      setPhase(res.activeQuestion.alreadyAnswered ? 'waiting' : res.state.status === 'paused' ? 'paused' : 'question');
       if (!res.activeQuestion.alreadyAnswered) setSelected([]);
     } else if (res.state.status === 'paused') setPhase('paused');
     else setPhase(res.state.status === 'lobby' ? 'lobby' : 'waiting');
@@ -67,7 +75,12 @@ export default function Play() {
     });
 
     if (state?.joined) applyJoined(state.joined);
-    else socket.connected ? rejoin() : socket.once('connect', rejoin);
+    else if (socket.connected) rejoin();
+    const reconnected = () => { setConnectionError(false); rejoin(); };
+    socket.on('connect', reconnected);
+    const connectTimer = window.setTimeout(() => {
+      if (!socket.connected) setConnectionError(true);
+    }, 12000);
 
     const onLobby = (s: any) => setPlayerCount(s.players.length);
     const onShow = ({ question, deadline, serverNow }: any) => {
@@ -87,7 +100,7 @@ export default function Play() {
     };
     const onOver = (data: any) => { clearPendingAnswer(pin); setFinale(data); setPhase('over'); };
     const onKicked = () => { setPhase('kicked'); toast.error('The host removed you from this game.'); };
-    const onReconnect = () => rejoin();
+
 
     socket.on('lobby:state', onLobby);
     socket.on('question:show', onShow);
@@ -96,12 +109,13 @@ export default function Play() {
     socket.on('game:resumed', onResumed);
     socket.on('game:over', onOver);
     socket.on('player:kicked', onKicked);
-    socket.io.on('reconnect', onReconnect);
+
     return () => {
       socket.off('lobby:state', onLobby); socket.off('question:show', onShow);
       socket.off('player:result', onResult); socket.off('game:paused', onPaused);
       socket.off('game:resumed', onResumed); socket.off('game:over', onOver);
-      socket.off('player:kicked', onKicked); socket.io.off('reconnect', onReconnect);
+      socket.off('player:kicked', onKicked); socket.off('connect', reconnected);
+      window.clearTimeout(connectTimer);
     };
   }, [pin]); // eslint-disable-line
 
@@ -114,7 +128,9 @@ export default function Play() {
     getSocket().emit('player:answer', { pin, playerId, questionIndex: q.index, answer }, (res: any) => {
       if (res?.ok || res?.late) clearPendingAnswer(pin);
       if (res?.late) toast('Time was up before your answer arrived.');
-      else if (res?.error && res.error !== 'stale') toast.error(res.error);
+      else if (res?.error && res.error !== 'stale') {
+        setPhase('question'); toast.error(res.error);
+      }
     });
   };
 
@@ -125,7 +141,7 @@ export default function Play() {
   };
 
   const shell = (children: React.ReactNode) => (
-    <main className="mx-auto flex min-h-dvh max-w-lg flex-col px-4 py-5">
+    <main className="safe-bottom mx-auto flex min-h-dvh max-w-lg flex-col px-4 py-5">
       <header className="mb-5 flex items-center justify-between text-sm font-semibold">
         <span className="truncate text-ink/55 dark:text-fog/55">{quizTitle || `Game ${pin}`}</span>
         <span className="flex items-center gap-2">
@@ -137,7 +153,14 @@ export default function Play() {
     </main>
   );
 
-  if (phase === 'connecting') return <div className="grid min-h-dvh place-items-center"><Spinner className="h-8 w-8" /></div>;
+  if (phase === 'connecting') return connectionError ? shell(
+    <div className="card mt-10 p-6 text-center">
+      <h1 className="font-bold">Unable to connect to live game</h1>
+      <p className="mt-2 text-sm text-ink/60 dark:text-fog/60">Check your internet connection or ask the host to restart the live server.</p>
+      <button onClick={() => { setConnectionError(false); getSocket().connect(); }} className="btn-primary mt-5 w-full">Retry</button>
+      <button onClick={() => navigate('/join')} className="btn-ghost mt-2 w-full">Back to join</button>
+    </div>
+  ) : <div className="grid min-h-dvh place-items-center"><Spinner className="h-8 w-8" /></div>;
   if (phase === 'kicked') return shell(
     <div className="card mt-10 p-8 text-center">
       <p className="font-bold">You were removed from this game.</p>
@@ -181,7 +204,7 @@ export default function Play() {
       </div>
       {question.multi && (
         <button onClick={() => selected.length ? submit(selected) : toast.error('Select at least one answer.')}
-          className="btn-primary sticky bottom-4 mt-4 w-full shadow-lift" disabled={phase === 'paused'}>
+          className="btn-primary sticky bottom-[max(1rem,env(safe-area-inset-bottom))] mt-4 w-full shadow-lift" disabled={phase === 'paused'}>
           Lock in {selected.length ? `${selected.length} answer${selected.length > 1 ? 's' : ''}` : 'answers'}
         </button>
       )}

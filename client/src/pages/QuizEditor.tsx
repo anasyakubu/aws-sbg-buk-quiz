@@ -142,7 +142,7 @@ export default function QuizEditor() {
                 <input id={`time-${i}`} type="number" min={5} max={300} className="input" value={q.timeLimit} onChange={e => updateQ(i, { timeLimit: Math.max(5, Math.min(300, Number(e.target.value) || 20)) })} />
               </Field>
               <Field label="Points" htmlFor={`pts-${i}`}>
-                <input id={`pts-${i}`} type="number" min={0} max={5000} step={100} className="input" value={q.points} onChange={e => updateQ(i, { points: Math.max(0, Math.min(5000, Number(e.target.value) || 1000)) })} />
+                <input id={`pts-${i}`} type="number" min={0} max={5000} step={100} className="input" value={q.points} onChange={e => updateQ(i, { points: Math.max(0, Math.min(5000, Number(e.target.value) || 0)) })} />
               </Field>
             </div>
 

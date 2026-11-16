@@ -4,7 +4,7 @@ import QRCode from 'react-qr-code';
 import toast from 'react-hot-toast';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Play, SkipForward, Pause, Square, ArrowRight, Copy, Users, X } from 'lucide-react';
-import { getSocket } from '../lib/socket';
+import { getSocket, socketAck } from '../lib/socket';
 import type { LeaderboardEntry, PublicQuestion } from '../lib/types';
 import { Spinner } from '../components/ui';
 import { Logo } from '../components/Logo';
@@ -29,34 +29,73 @@ export default function Host() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [finale, setFinale] = useState<any>(null);
   const pinRef = useRef('');
+  const [connectionError, setConnectionError] = useState('');
 
   useEffect(() => {
     const socket = getSocket();
-    const create = () => socket.emit('host:create', { quizId }, (res: any) => {
-      if (res?.error) { toast.error(res.error); return navigate('/dashboard'); }
-      pinRef.current = res.pin;
-      setPin(res.pin); setQuizTitle(res.quizTitle); setPhase('lobby');
-    });
-    socket.connected ? create() : socket.once('connect', create);
+    let disposed = false;
+    const storageKey = `hosting:${quizId}`;
 
-    const onLobby = (s: any) => setPlayers(s.players);
+    const onLobby = (data: any) => setPlayers(data.players);
     const onShow = ({ question, deadline, serverNow }: any) => {
       setSkew(serverNow - Date.now());
-      setQuestion(question); setDeadline(deadline); setReveal(null); setPhase('question');
+      setQuestion(question); setDeadline(deadline); setReveal(null);
+      setAnswered({ answered: 0, total: 0 }); setPhase('question');
     };
     const onEnd = (data: any) => { setReveal(data); setPhase('reveal'); };
     const onLb = ({ leaderboard }: any) => setLeaderboard(leaderboard);
-    const onCount = (c: any) => setAnswered(c);
+    const onCount = (data: any) => setAnswered(data);
     const onPaused = () => setPhase('paused');
-    const onResumed = ({ deadline, serverNow }: any) => { setSkew(serverNow - Date.now()); setDeadline(deadline); setPhase('question'); };
-    const onOver = (data: any) => { setFinale(data); setPhase('over'); };
-    const onReconnect = () => {
-      if (!pinRef.current) return;
-      socket.emit('host:rejoin', { pin: pinRef.current }, (res: any) => {
-        if (res?.leaderboard) setLeaderboard(res.leaderboard);
-        if (res?.state) setPlayers(res.state.players);
-      });
+    const onResumed = ({ deadline, serverNow }: any) => {
+      setSkew(serverNow - Date.now()); setDeadline(deadline); setPhase('question');
     };
+    const onOver = (data: any) => { setFinale(data); setPhase('over'); };
+
+    const onConnected = async () => {
+      if (disposed) return;
+      setConnectionError('');
+      const previousPin = pinRef.current || sessionStorage.getItem(storageKey);
+      if (previousPin) {
+        try {
+          const res = await socketAck<any>('host:rejoin', { pin: previousPin });
+          if (disposed) return;
+          if (!res?.error && res?.state) {
+            pinRef.current = previousPin;
+            setPin(previousPin);
+            setQuizTitle(res.state.quizTitle);
+            setPlayers(res.state.players);
+            setLeaderboard(res.leaderboard || []);
+            setAnswered(res.answered || { answered: 0, total: 0 });
+            if (res.activeQuestion) {
+              setQuestion(res.activeQuestion.question);
+              setDeadline(res.activeQuestion.deadline);
+              setSkew(res.activeQuestion.serverNow - Date.now());
+            }
+            setReveal(res.reveal || null);
+            if (res.finale) setFinale(res.finale);
+            setPhase(res.state.status === 'ended' ? 'over' : res.state.status);
+            return;
+          }
+          // Game expired or server restarted: start a fresh lobby.
+          pinRef.current = '';
+          sessionStorage.removeItem(storageKey);
+        } catch (err) {
+          if (!disposed) setConnectionError(err instanceof Error ? err.message : 'Unable to restore this game.');
+          return;
+        }
+      }
+      try {
+        const res = await socketAck<any>('host:create', { quizId });
+        if (disposed) return;
+        if (res?.error) { toast.error(res.error); navigate('/dashboard'); return; }
+        pinRef.current = res.pin;
+        sessionStorage.setItem(storageKey, res.pin);
+        setPin(res.pin); setQuizTitle(res.quizTitle); setPhase('lobby');
+      } catch (err) {
+        if (!disposed) setConnectionError(err instanceof Error ? err.message : 'Unable to connect to the live server.');
+      }
+    };
+
     socket.on('lobby:state', onLobby);
     socket.on('question:show', onShow);
     socket.on('question:end', onEnd);
@@ -65,25 +104,50 @@ export default function Host() {
     socket.on('game:paused', onPaused);
     socket.on('game:resumed', onResumed);
     socket.on('game:over', onOver);
-    socket.io.on('reconnect', onReconnect);
+    socket.on('connect', onConnected);
+    const initialTimeout = window.setTimeout(() => {
+      if (!socket.connected && !disposed) {
+        setConnectionError('The live server could not be reached.');
+      }
+    }, 12000);
+    if (socket.connected) void onConnected();
     return () => {
+      disposed = true;
+      window.clearTimeout(initialTimeout);
       socket.off('lobby:state', onLobby); socket.off('question:show', onShow);
       socket.off('question:end', onEnd); socket.off('leaderboard:update', onLb);
       socket.off('host:answer-count', onCount); socket.off('game:paused', onPaused);
       socket.off('game:resumed', onResumed); socket.off('game:over', onOver);
-      socket.io.off('reconnect', onReconnect);
+      socket.off('connect', onConnected);
     };
-  }, [quizId]); // eslint-disable-line
+  }, [quizId, navigate]);
 
-  const cmd = (event: string) => getSocket().emit(event, { pin }, (res: any) => res?.error && toast.error(res.error));
-  const kick = (playerId: string) => getSocket().emit('host:kick', { pin, playerId }, (res: any) => res?.error && toast.error(res.error));
+  const cmd = async (event: string) => {
+    try {
+      const res = await socketAck<any>(event, { pin });
+      if (res?.error) toast.error(res.error);
+    } catch (err) { toast.error(err instanceof Error ? err.message : 'Command failed.'); }
+  };
+  const kick = async (playerId: string) => {
+    try {
+      const res = await socketAck<any>('host:kick', { pin, playerId });
+      if (res?.error) toast.error(res.error);
+    } catch (err) { toast.error(err instanceof Error ? err.message : 'Unable to remove player.'); }
+  };
   const joinUrl = `${location.origin}/join?pin=${pin}`;
-  const copy = () => navigator.clipboard.writeText(joinUrl).then(() => toast.success('Invite link copied'));
+  const copy = () => navigator.clipboard.writeText(joinUrl).then(() => toast.success('Invite link copied')).catch(() => toast.error('Could not copy link.')); 
 
-  if (phase === 'creating') return <div className="grid min-h-dvh place-items-center"><Spinner className="h-8 w-8" /></div>;
+  if (phase === 'creating') return connectionError ? (
+    <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-4 px-5 text-center">
+      <h1 className="text-xl font-bold">Live quiz server unavailable</h1>
+      <p role="alert" className="text-sm text-ink/60 dark:text-fog/60">{connectionError} Make sure VITE_API_URL points to the running Node.js backend, not a REST-only serverless API.</p>
+      <button className="btn-primary" onClick={() => { setConnectionError(''); getSocket().connect(); }}>Retry connection</button>
+      <button className="btn-ghost" onClick={() => navigate('/dashboard')}>Back to dashboard</button>
+    </main>
+  ) : <div className="grid min-h-dvh place-items-center"><Spinner className="h-8 w-8" /></div>;
 
   return (
-    <main className="mx-auto min-h-dvh max-w-5xl px-4 py-6">
+    <main className="safe-bottom mx-auto min-h-dvh max-w-5xl px-4 py-6">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <Logo />
         <div className="flex items-center gap-2">
@@ -97,7 +161,7 @@ export default function Host() {
           <section className="card flex flex-col items-center p-8 text-center">
             <p className="text-sm font-semibold text-ink/55 dark:text-fog/55">{quizTitle}</p>
             <p className="mt-3 text-[13px] font-semibold uppercase tracking-widest text-ink/45 dark:text-fog/45">Join with PIN</p>
-            <p className="mt-1 font-mono text-6xl font-bold tracking-[0.18em] text-amber-dark dark:text-amber-aws sm:text-7xl" aria-label={`Game PIN ${pin.split('').join(' ')}`}>{pin}</p>
+            <p className="mt-1 font-mono text-4xl font-bold tracking-[0.08em] min-[360px]:text-5xl min-[480px]:tracking-[0.18em] text-amber-dark dark:text-amber-aws sm:text-7xl" aria-label={`Game PIN ${pin.split('').join(' ')}`}>{pin}</p>
             <div className="mt-6 rounded-xl bg-paper p-3 shadow-card dark:bg-white">
               <QRCode value={joinUrl} size={168} aria-label="QR code to join the game" />
             </div>

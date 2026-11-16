@@ -54,6 +54,6 @@ router.get('/results/hosted', requireAuth, results.hostedGames);
 router.get('/results/history', requireAuth, results.myHistory);
 router.get('/results/:id', requireAuth, results.gameDetail);
 
-router.get('/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+router.get('/health', (req, res) => res.json({ ok: true, realtime: req.app.locals.realtimeEnabled === true, ts: Date.now() }));
 
 export default router;

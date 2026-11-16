@@ -22,6 +22,8 @@ async function main() {
     connectionStateRecovery: { maxDisconnectionDuration: 2 * 60 * 1000 },
   });
   registerGameHandlers(io);
+  // Expose whether this deployment actually runs the Socket.IO game engine.
+  app.locals.realtimeEnabled = true;
 
   server.listen(env.port, () => {
     console.log(`[server] listening on http://localhost:${env.port} (${env.nodeEnv})`);

@@ -1,7 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Navbar } from './components/Navbar';
-// import { ConnectionBanner } from './components/ConnectionBanner';
+import { ConnectionBanner } from './components/ConnectionBanner';
 import { Spinner } from './components/ui';
 import { useAuth } from './context/AuthContext';
 
@@ -29,7 +29,7 @@ export default function App() {
   const fullscreen = pathname.startsWith('/play') || pathname.startsWith('/host/');
   return (
     <div className="min-h-dvh">
-      {/* <ConnectionBanner /> */}
+      <ConnectionBanner />
       {!fullscreen && <Navbar />}
       <Suspense fallback={<div className="grid min-h-[60vh] place-items-center"><Spinner className="h-7 w-7" /></div>}>
         <Routes>

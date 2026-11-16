@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { ArrowRight } from 'lucide-react';
-import { getSocket } from '../lib/socket';
+import { socketAck } from '../lib/socket';
 import { getPlayerId } from '../lib/player';
 import { useAuth } from '../context/AuthContext';
 import { Field, Spinner } from '../components/ui';
@@ -16,24 +16,28 @@ export default function Join() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  const join = (e: React.FormEvent) => {
+  const join = async (e: React.FormEvent) => {
     e.preventDefault();
-    const nickname = (name || user?.name || '').trim();
-    if (pin.length !== 6) return toast.error('Enter the 6-digit game PIN.');
+    if (busy) return;
+    const cleanPin = pin.trim();
+    const nickname = (name || user?.name || '').trim().slice(0, 24);
+    if (!/^\d{6}$/.test(cleanPin)) return toast.error('Enter the 6-digit game PIN.');
     if (!nickname) return toast.error('Pick a nickname so everyone knows who you are.');
     setBusy(true);
-    localStorage.setItem('nickname', nickname);
-    const socket = getSocket();
-    const doJoin = () => socket.emit('player:join', { pin, playerId: getPlayerId(), name: nickname }, (res: any) => {
-      setBusy(false);
+    try {
+      const res = await socketAck<{ error?: string; state?: unknown; you?: unknown }>(
+        'player:join', { pin: cleanPin, playerId: getPlayerId(), name: nickname }
+      );
       if (res?.error) return toast.error(res.error);
-      navigate(`/play/${pin}`, { state: { joined: res } });
-    });
-    socket.connected ? doJoin() : (socket.once('connect', doJoin), socket.connect());
+      localStorage.setItem('nickname', nickname);
+      navigate(`/play/${cleanPin}`, { state: { joined: res } });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Unable to join. Try again.');
+    } finally { setBusy(false); }
   };
 
   return (
-    <main className="mx-auto flex max-w-md flex-col items-center px-4 pt-12">
+    <main className="safe-bottom mx-auto flex max-w-md flex-col items-center px-4 pt-8 sm:pt-12">
       <Logo size={44} />
       <form onSubmit={join} className="card mt-8 w-full space-y-4 p-6">
         <Field label="Game PIN" htmlFor="pin">

@@ -18,6 +18,9 @@ const questionSchema = z.object({
   difficulty: z.enum(['easy', 'medium', 'hard']).default('medium'),
 }).refine(q => q.correctIndexes.every(i => i < q.options.length), {
   message: 'Correct answer index is out of range',
+}).refine(q => new Set(q.correctIndexes).size === q.correctIndexes.length &&
+  (q.type === 'multiple_answer' || q.correctIndexes.length === 1), {
+  message: 'Correct answers must be unique, and single-answer questions must have exactly one.',
 });
 
 export const quizSchema = z.object({

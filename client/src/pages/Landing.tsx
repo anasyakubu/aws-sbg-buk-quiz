@@ -2,6 +2,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
 import { Zap, Wifi, Sparkles } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { InstallApp } from '../components/InstallApp';
 
 export default function Landing() {
   const [pin, setPin] = useState('');
@@ -38,11 +39,12 @@ export default function Landing() {
           <button className="btn-primary" disabled={pin.length !== 6}>Join</button>
         </form>
 
-        <div className="mt-5 flex gap-3">
+        <div className="mt-5 flex flex-wrap justify-center gap-3">
           {user
             ? <Link to="/dashboard" className="btn-dark">Go to dashboard</Link>
             : <><Link to="/register" className="btn-dark">Host a quiz</Link><Link to="/login" className="btn-ghost">Sign in</Link></>}
         </div>
+        <InstallApp />
       </section>
 
       <section className="grid gap-4 pb-20 sm:grid-cols-3">
