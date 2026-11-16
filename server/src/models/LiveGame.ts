@@ -19,23 +19,39 @@ export interface ILiveGame {
   expiresAt: Date;
 }
 
-const schema = new Schema<ILiveGame>({
-  pin: { type: String, required: true, unique: true, index: true },
-  quizId: { type: Schema.Types.ObjectId, ref: 'Quiz', required: true },
-  quizTitle: { type: String, required: true },
-  hostUserId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-  hostSessionKey: { type: String },
-  questions: { type: [Schema.Types.Mixed], required: true },
-  status: { type: String, enum: ['lobby', 'question', 'paused', 'reveal', 'ended'], default: 'lobby' },
-  currentIndex: { type: Number, default: -1 },
-  questionStartedAt: { type: Number, default: 0 },
-  questionDeadline: { type: Number, default: 0 },
-  remainingOnPause: { type: Number, default: 0 },
-  startedAt: { type: Number, default: 0 },
-  finalResult: { type: Schema.Types.Mixed },
-  expiresAt: { type: Date, required: true },
-}, { timestamps: true });
+const schema = new Schema<ILiveGame>(
+  {
+    pin: { type: String, required: true, unique: true, index: true },
+    quizId: { type: Schema.Types.ObjectId, ref: 'Quiz', required: true },
+    quizTitle: { type: String, required: true },
+    hostUserId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    hostSessionKey: { type: String },
+    // Mongoose typings don't accept [Schema.Types.Mixed] for IQuestion[] directly.
+    // Cast the definition; the field is still typed via ILiveGame.questions.
+    questions: { type: [Schema.Types.Mixed], required: true } as any,
+    status: {
+      type: String,
+      enum: ['lobby', 'question', 'paused', 'reveal', 'ended'],
+      default: 'lobby',
+    },
+    currentIndex: { type: Number, default: -1 },
+    questionStartedAt: { type: Number, default: 0 },
+    questionDeadline: { type: Number, default: 0 },
+    remainingOnPause: { type: Number, default: 0 },
+    startedAt: { type: Number, default: 0 },
+    finalResult: { type: Schema.Types.Mixed },
+    expiresAt: { type: Date, required: true },
+  },
+  { timestamps: true },
+);
+
 schema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
-schema.index({ hostUserId: 1, hostSessionKey: 1 }, { unique: true, partialFilterExpression: { hostSessionKey: { $exists: true } } });
+schema.index(
+  { hostUserId: 1, hostSessionKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { hostSessionKey: { $exists: true } },
+  },
+);
 
 export const LiveGame = mongoose.model<ILiveGame>('LiveGame', schema);
