@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { api, getToken, setToken } from '../lib/api';
-import { resetSocket } from '../lib/socket';
+// import { resetSocket } from '../lib/socket';
 import type { User } from '../lib/types';
 
 interface AuthCtx {
@@ -32,14 +32,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(token);
     localStorage.setItem('user', JSON.stringify(u));
     setUser(u);
-    resetSocket(); // reconnect socket with the new token
+    //resetSocket(); // reconnect socket with the new token
   };
 
   const signOut = () => {
     setToken(null);
     localStorage.removeItem('user');
     setUser(null);
-    resetSocket();
+    // resetSocket();
   };
 
   const refresh = async () => {
