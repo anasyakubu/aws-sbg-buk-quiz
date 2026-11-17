@@ -5,6 +5,23 @@ import { env } from './env';
 
 export const googleConfigured = Boolean(env.google.clientId && env.google.clientSecret);
 
+/**
+ * Google's ID-token payload is typed strictly by passport-google-oauth20
+ * (e.g. `email_verified` is `boolean | undefined`, `verified_email` is absent),
+ * but at runtime Google may send booleans OR strings, and some payloads still
+ * use the legacy `verified_email` field. This permissive shape lets us handle
+ * all of those without fighting the compiler.
+ */
+type GoogleJson = {
+  email_verified?: boolean | string;
+  verified_email?: boolean | string;
+  hd?: string;
+};
+
+function isTruthyFlag(value: boolean | string | undefined): boolean {
+  return value === true || value === 'true';
+}
+
 export function configurePassport(): boolean {
   if (!googleConfigured) {
     console.warn('[auth] Google OAuth not configured: provide GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in the API deployment.');
@@ -19,15 +36,16 @@ export function configurePassport(): boolean {
     proxy: true,
   }, async (_accessToken, _refreshToken, profile, done) => {
     try {
+      const json = (profile._json ?? {}) as GoogleJson;
+
       const email = profile.emails?.[0]?.value?.trim().toLowerCase();
       if (!email) return done(new Error('Google did not share an email address.'));
 
       // Only accept verified Google emails; otherwise someone could claim an
       // existing password account by providing an unverified address.
-      const verified = profile._json?.email_verified === true ||
-        profile._json?.email_verified === 'true' ||
-        profile._json?.verified_email === true ||
-        profile._json?.verified_email === 'true';
+      const verified =
+        isTruthyFlag(json.email_verified) ||
+        isTruthyFlag(json.verified_email);
       if (!verified) return done(new Error('Google did not verify this email address.'));
 
       let user = await User.findOne({ googleId: profile.id });
@@ -39,7 +57,7 @@ export function configurePassport(): boolean {
         // For existing password accounts, Google must be authoritative for the
         // address, not merely have verified it some time in the past.
         const domain = email.split('@')[1];
-        const hostedDomain = (profile._json?.hd || '').toLowerCase();
+        const hostedDomain = (json.hd || '').toLowerCase();
         const authoritative = domain === 'gmail.com' || (Boolean(hostedDomain) && hostedDomain === domain);
         if (user && !authoritative) {
           return done(new Error('Existing password account cannot be automatically linked to this Google identity.'));
