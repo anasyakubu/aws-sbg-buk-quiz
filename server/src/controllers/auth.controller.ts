@@ -6,22 +6,22 @@ import { signToken } from '../utils/jwt';
 import { AuthRequest } from '../middleware/auth';
 
 export const registerSchema = z.object({
-  name: z.string().min(2, 'Name must be at least 2 characters').max(60),
-  email: z.string().email('Enter a valid email address'),
+  name: z.string().trim().min(2, 'Name must be at least 2 characters').max(60),
+  email: z.string().trim().toLowerCase().email('Enter a valid email address'),
   password: z.string().min(8, 'Password must be at least 8 characters').max(100),
-  institution: z.string().max(120).optional(),
-  department: z.string().max(120).optional(),
+  institution: z.string().trim().max(120).optional(),
+  department: z.string().trim().max(120).optional(),
 });
 
 export const loginSchema = z.object({
-  email: z.string().email('Enter a valid email address'),
+  email: z.string().trim().toLowerCase().email('Enter a valid email address'),
   password: z.string().min(1, 'Enter your password'),
 });
 
 export const profileSchema = z.object({
   name: z.string().min(2).max(60).optional(),
-  institution: z.string().max(120).optional(),
-  department: z.string().max(120).optional(),
+  institution: z.string().trim().max(120).optional(),
+  department: z.string().trim().max(120).optional(),
   skillLevel: z.enum(['beginner', 'intermediate', 'advanced']).optional(),
   avatarUrl: z.string().url().max(500).optional().or(z.literal('')),
 });
@@ -40,7 +40,7 @@ const publicUser = (u: any) => ({
 export async function register(req: AuthRequest, res: Response) {
   const { name, email, password, institution, department } = req.body;
   const existing = await User.findOne({ email });
-  if (existing) return res.status(409).json({ error: 'An account with this email already exists. Sign in instead.' });
+  if (existing) return res.status(409).json({ error: existing.googleId && !existing.passwordHash ? 'This email is registered with Google. Use Continue with Google to sign in.' : 'An account with this email already exists. Sign in instead.' });
   const passwordHash = await bcrypt.hash(password, 12);
   const user = await User.create({ name, email, passwordHash, institution, department });
   const token = signToken({ sub: user.id, role: user.role });

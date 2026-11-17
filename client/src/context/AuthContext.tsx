@@ -24,7 +24,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!getToken()) { setLoading(false); return; }
     api<{ user: User }>('/auth/me')
       .then(({ user }) => { setUser(user); localStorage.setItem('user', JSON.stringify(user)); })
-      .catch(() => { setUser(null); })
+      .catch(() => { setUser(null); localStorage.removeItem('user'); })
       .finally(() => setLoading(false));
   }, []);
 

@@ -20,7 +20,7 @@ const userSchema = new Schema<IUser>(
   {
     email: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
     passwordHash: { type: String },
-    googleId: { type: String, index: true, sparse: true },
+    googleId: { type: String, unique: true, sparse: true },
     name: { type: String, required: true, trim: true, maxlength: 60 },
     role: { type: String, enum: ['admin', 'host', 'participant'], default: 'host' },
     institution: { type: String, default: 'Bayero University Kano', maxlength: 120 },

@@ -22,6 +22,20 @@ The PWA remains installable with a manifest, service worker, icons, install UI,
 mobile sizing, dark theme, and safe-area support. The deprecated Apple-only
 mobile capability meta now has the standard companion meta tag.
 
+## Registration and Google sign-in fixes
+
+The signup API now validates and normalizes account email addresses, returns clear
+duplicate-registration errors, and correctly forwards async database errors.
+Google sign-in now checks that its Vercel settings are present, verifies an OAuth
+state nonce from an HttpOnly cookie, and transfers the JWT using a URL fragment
+instead of an exposed URL query parameter. The login/register screens show
+configuration and callback errors, rather than an unexplained failure.
+
+**Required:** read [AUTH_SIGNUP_FIX.md](AUTH_SIGNUP_FIX.md) to configure the
+Google Cloud OAuth Web Client, production callback URI, MongoDB, and the two
+Vercel projects. OAuth cannot work without valid Google credentials configured
+on the **API** project.
+
 ## Run locally
 
 Create `server/.env` from `server/.env.example`. Run MongoDB locally or set a

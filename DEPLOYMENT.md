@@ -1,5 +1,7 @@
 # Deploy both the frontend and API to Vercel
 
+**Email registration or Google signup issues? Read [AUTH_SIGNUP_FIX.md](AUTH_SIGNUP_FIX.md) first.**
+
 This version uses **MongoDB-backed live games** with HTTP updates every ~1.4 seconds.
 It does **not** require an inbound WebSocket, a running Socket.IO server, sticky sessions,
 Redis, or Render. API instances can be created and removed by Vercel without losing
@@ -39,7 +41,7 @@ CLIENT_URL=https://aws-sbg-buk-quiz.vercel.app
 SERVER_URL=https://aws-sbg-buk-quiz-api.vercel.app
 ```
 
-Optional: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `OPENAI_API_KEY`,
+For **Continue with Google** to work, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `SERVER_URL` are required on the API project. Optional AI keys: `OPENAI_API_KEY`,
 `ANTHROPIC_API_KEY`. Use the API's production URL for the Google OAuth callback:
 `https://aws-sbg-buk-quiz-api.vercel.app/api/auth/google/callback`.
 
@@ -50,10 +52,10 @@ Optional: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `OPENAI_API_KEY`,
 It must answer with JSON like:
 
 ```json
-{"ok":true,"realtime":true,"transport":"http-polling","websocketRequired":false,"ts":1770000000000}
+{"ok":true,"apiVersion":"vercel-auth-v2","realtime":true,"transport":"http-polling","websocketRequired":false,"ts":1770000000000}
 ```
 
-The `ts` number changes and is illustrative. If the endpoint gives 404/500, check
+The `ts` number changes and is illustrative. For authentication, `/api/auth/providers` must report `"authVersion":"auth-v2"` and `"google":true` once credentials are configured. If the endpoint gives 404/500, check
 that the Root Directory is `server`, the deployment is up to date, and MongoDB
 connection settings are valid.
 

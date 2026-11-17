@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import { Field, Spinner } from '../components/ui';
 import { GoogleButton } from '../components/GoogleButton';
+import { googleErrorMessage } from '../lib/authErrors';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -13,6 +14,7 @@ export default function Login() {
   const { signIn } = useAuth();
   const navigate = useNavigate();
   const [params] = useSearchParams();
+  const googleError = googleErrorMessage(params.get('error'));
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,9 +32,9 @@ export default function Login() {
     <main className="mx-auto flex max-w-md flex-col px-4 pt-12">
       <h1 className="text-2xl font-extrabold tracking-tight">Welcome back</h1>
       <p className="mt-1 text-sm text-ink/55 dark:text-fog/55">Sign in to create and host quizzes.</p>
-      {params.get('error') === 'google' && (
+      {googleError && (
         <p role="alert" className="mt-4 rounded-lg bg-red-600/10 px-3.5 py-2.5 text-sm font-medium text-red-700 dark:text-red-400">
-          Google sign-in didn't complete. Try again or use your email.
+          {googleError}
         </p>
       )}
       <form onSubmit={submit} className="card mt-6 space-y-4 p-6">

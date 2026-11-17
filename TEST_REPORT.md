@@ -1,4 +1,12 @@
-# Verification report — Vercel HTTP live quiz / PWA
+# Verification report — Vercel quiz / authentication / PWA
+
+## Authentication update (November 2026)
+
+- **11/11 Node.js automated tests passed** (`npm test`), including 6 new authentication checks: Google OAuth nonce and cookie validation, registration success and duplicates, Express async rejection forwarding, MongoDB duplicate conflict handling, verified Google identity creation/reuse, and authentication route wiring.
+- **54 TypeScript/TSX source files syntax-transpiled successfully**, without syntax errors. This is **not** a full TypeScript typecheck.
+- `npm ci --offline` failed (`ENOTCACHED`); online dependency download did not complete. Therefore, full builds, a real MongoDB signup, browser/E2E testing and a live Google OAuth exchange are **not verified**.
+- Review `AUTH_SIGNUP_FIX.md`, then redeploy the Vercel API and frontend to validate against real deployment and credentials.
+
 
 ## Completed locally
 

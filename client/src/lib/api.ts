@@ -23,12 +23,19 @@ export async function api<T = any>(path: string, options: RequestInit = {}, retr
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const doFetch = () => fetch(`${BASE}${path}`, { ...options, headers });
-  const res = await (retry && (!options.method || options.method === 'GET') ? withRetry(doFetch) : doFetch());
+  let res: Response;
+  try {
+    res = await (retry && (!options.method || options.method === 'GET') ? withRetry(doFetch) : doFetch());
+  } catch {
+    throw new Error('Cannot reach the API. Check your internet connection and the frontend VITE_API_URL setting on Vercel.');
+  }
   let data: any = null;
   try { data = await res.json(); } catch { /* empty body */ }
   if (!res.ok) {
     if (res.status === 401 && getToken()) { setToken(null); localStorage.removeItem('user'); }
-    throw new Error(data?.error || 'Request failed. Check your connection and try again.');
+    if (res.status === 404) throw new Error('API route not found (404). Deploy the updated server/ project to Vercel and check VITE_API_URL.');
+    if (res.status === 429) throw new Error(data?.error || 'Too many attempts. Please try again later.');
+    throw new Error(data?.error || `Request failed (${res.status}). Check your connection and try again.`);
   }
   return data as T;
 }
